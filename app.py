@@ -30,8 +30,8 @@ logs = load_csv("daily_logs.csv", [
 # ---------------- LOGIN ----------------
 st.sidebar.title("Login")
 
-emp_id = st.sidebar.text_input("Employee ID")
-password = st.sidebar.text_input("Password", type="password")
+emp_id = st.sidebar.text_input("Employee ID").strip()
+password = st.sidebar.text_input("Password", type="password").strip()
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -112,3 +112,4 @@ elif menu == "Reports":
     summary = logs.groupby(["Asset_ID", "Work_Type"]).size().reset_index(name="Count")
     st.subheader("Work Summary")
     st.dataframe(summary, use_container_width=True)
+
