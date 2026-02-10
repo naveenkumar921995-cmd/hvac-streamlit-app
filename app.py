@@ -1,3 +1,11 @@
+import os
+import pandas as pd
+import streamlit as st
+
+# Ensure data directory exists (FIX FOR STREAMLIT CLOUD)
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
@@ -8,15 +16,11 @@ st.set_page_config("DLF Cyber Park – HVAC", layout="wide")
 DATA = "data/"
 
 # ---------------- SAFE FILE LOADER ----------------
-def load_csv(file, columns):
-    path = DATA + file
+def load_csv(filename, columns):
+    path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
         pd.DataFrame(columns=columns).to_csv(path, index=False)
-    try:
-        df = pd.read_csv(path)
-        if df.empty:
-            return pd.DataFrame(columns=columns)
-        return df
+    return pd.read_csv(path)
     except:
         return pd.DataFrame(columns=columns)
 
@@ -165,3 +169,4 @@ elif menu == "Alerts":
 elif menu == "Assets":
     st.title("Asset Master")
     st.dataframe(assets)
+
