@@ -1,117 +1,114 @@
-import os
-import pandas as pd
 import streamlit as st
+import pandas as pd
 from datetime import datetime
+import os
 
 # ---------------- CONFIG ----------------
-st.set_page_config(page_title="HVAC Asset Management", layout="wide")
+st.set_page_config(page_title="HVAC Asset Management – DLF Cyber Park", layout="wide")
 
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ---------------- SAFE CSV LOADER ----------------
-def load_csv(filename, columns):
-    path = os.path.join(DATA_DIR, filename)
-    try:
-        if not os.path.exists(path):
-            df = pd.DataFrame(columns=columns)
-            df.to_csv(path, index=False)
-        return pd.read_csv(path)
-    except Exception as e:
-        st.error(f"Error loading {filename}: {e}")
-        return pd.DataFrame(columns=columns)
+def load_csv(file, columns):
+    path = f"{DATA_DIR}/{file}"
+    if not os.path.exists(path) or os.stat(path).st_size == 0:
+        pd.DataFrame(columns=columns).to_csv(path, index=False)
+    return pd.read_csv(path)
 
 # ---------------- LOAD DATA ----------------
-users = load_csv(
-    "users.csv",
-    ["Employee_ID", "Name", "Role", "Password"]
-)
-
-assets = load_csv(
-    "assets.csv",
-    [
-        "Asset_ID",
-        "Asset_Name",
-        "Asset_Type",
-        "Location",
-        "Health",
-        "AMC_End_Date",
-        "OEM_Warranty_End",
-        "Compliance_End_Date"
-    ]
-)
+users = load_csv("users.csv", ["Employee_ID", "Name", "Role", "Password"])
+assets = load_csv("assets.csv", [
+    "Asset_ID", "Asset_Name", "Asset_Type",
+    "Location", "Health", "AMC_End_Date"
+])
+logs = load_csv("daily_logs.csv", [
+    "Date", "Employee_ID", "Asset_ID",
+    "Work_Type", "Observation", "Status"
+])
 
 # ---------------- LOGIN ----------------
-st.sidebar.title("🔐 Login")
+st.sidebar.title("Login")
 
-if users.empty:
-    st.warning("No users found. Please add users.csv in data folder.")
-    st.stop()
-
-user_id = st.sidebar.selectbox("Employee ID", users["Employee_ID"])
+emp_id = st.sidebar.text_input("Employee ID")
 password = st.sidebar.text_input("Password", type="password")
 
-login_btn = st.sidebar.button("Login")
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-if not login_btn:
+if st.sidebar.button("Login"):
+    match = users[
+        (users["Employee_ID"] == emp_id) &
+        (users["Password"] == password)
+    ]
+    if not match.empty:
+        st.session_state.logged_in = True
+        st.session_state.user = match.iloc[0]
+    else:
+        st.sidebar.error("Invalid credentials")
+
+if not st.session_state.logged_in:
     st.stop()
 
-user = users[users["Employee_ID"] == user_id]
+user = st.session_state.user
+st.sidebar.success(f"{user['Name']} ({user['Role']})")
 
-if user.empty or password != str(user.iloc[0]["Password"]):
-    st.sidebar.error("Invalid credentials")
-    st.stop()
+# ---------------- MENU ----------------
+menu = st.sidebar.radio(
+    "Menu",
+    ["Dashboard", "Daily Work Log", "Assets", "Reports"]
+)
 
-st.sidebar.success(f"Welcome {user.iloc[0]['Name']} ({user.iloc[0]['Role']})")
+# ---------------- DASHBOARD ----------------
+if menu == "Dashboard":
+    st.title("HVAC Asset Dashboard")
 
-# ---------------- DASHBOARD (PHASE 3) ----------------
-st.title("🏢 HVAC Asset Management Dashboard")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Assets", len(assets))
+    col2.metric("OK", len(assets[assets["Health"] == "OK"]))
+    col3.metric("Attention", len(assets[assets["Health"] == "Attention"]))
 
-col1, col2, col3 = st.columns(3)
+    st.subheader("Asset Status")
+    st.dataframe(assets, use_container_width=True)
 
-col1.metric("Total Assets", len(assets))
+# ---------------- DAILY LOG ----------------
+elif menu == "Daily Work Log":
+    st.title("Daily HVAC Work Log")
 
-if "Health" in assets.columns:
-    col2.metric(
-        "Attention Required",
-        len(assets[assets["Health"] == "Attention"])
-    )
-else:
-    col2.metric("Attention Required", 0)
+    with st.form("log_form"):
+        asset_id = st.selectbox("Asset", assets["Asset_ID"])
+        work_type = st.selectbox("Work Type", ["Routine", "Preventive", "Breakdown"])
+        observation = st.text_area("Observation")
+        status = st.selectbox("Asset Health", ["OK", "Attention"])
+        submit = st.form_submit_button("Submit")
 
-# ---------------- EXPIRY LOGIC (PHASE 4) ----------------
-def days_left(date_str):
-    try:
-        return (pd.to_datetime(date_str) - datetime.today()).days
-    except:
-        return None
+    if submit:
+        new_log = pd.DataFrame([{
+            "Date": datetime.now().strftime("%Y-%m-%d"),
+            "Employee_ID": user["Employee_ID"],
+            "Asset_ID": asset_id,
+            "Work_Type": work_type,
+            "Observation": observation,
+            "Status": status
+        }])
 
-expiry_alerts = []
+        logs[:] = pd.concat([logs, new_log], ignore_index=True)
+        logs.to_csv(f"{DATA_DIR}/daily_logs.csv", index=False)
 
-for _, row in assets.iterrows():
-    for col in ["AMC_End_Date", "OEM_Warranty_End", "Compliance_End_Date"]:
-        days = days_left(row[col])
-        if days is not None and days <= 30:
-            expiry_alerts.append({
-                "Asset_ID": row["Asset_ID"],
-                "Asset_Name": row["Asset_Name"],
-                "Type": col.replace("_", " "),
-                "Days Left": days
-            })
+        assets.loc[assets["Asset_ID"] == asset_id, "Health"] = status
+        assets.to_csv(f"{DATA_DIR}/assets.csv", index=False)
 
-expiry_df = pd.DataFrame(expiry_alerts)
+        st.success("Work log submitted successfully")
 
-col3.metric("Expiring ≤ 30 days", len(expiry_df))
+# ---------------- ASSETS ----------------
+elif menu == "Assets":
+    st.title("Asset Master")
+    st.dataframe(assets, use_container_width=True)
 
-# ---------------- TABLES ----------------
-st.subheader("📋 Asset List")
-st.dataframe(assets, use_container_width=True)
+# ---------------- REPORTS ----------------
+elif menu == "Reports":
+    st.title("Monthly Reports")
 
-if not expiry_df.empty:
-    st.subheader("⏰ Expiry Alerts (Next 30 Days)")
-    st.dataframe(expiry_df, use_container_width=True)
-else:
-    st.success("No upcoming expiries 🎉")
-
-# ---------------- FOOTER ----------------
-st.caption("HVAC Asset Manager | Streamlit Cloud Ready ✅")
+    summary = logs.groupby(["Asset_ID", "Work_Type"]).size().reset_index(name="Count")
+    st.subheader("Work Summary")
+    st.dataframe(summary, use_container_width=True)
