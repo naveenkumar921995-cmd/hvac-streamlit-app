@@ -1,3 +1,0 @@
-Asset_ID,Asset_Name,Asset_Type,Location,Capacity,Health,Criticality(High / Medium / Low),AMC_End_Date,OEM_Warranty_End,Compliance_End_Date
-HVAC-AHU-TA-01,AHU-01,,Tower A - GF,20000 CFM,OK,,,,
-HVAC-AHU-TA-02,AHU-01,,Tower A - 1F,18000 CFM,OK,,,,
