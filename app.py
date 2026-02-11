@@ -2,57 +2,75 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import os
-from datetime import datetime, date
+from datetime import datetime
 import hashlib
 
 # ---------------- CONFIG ---------------- #
-st.set_page_config(layout="wide", page_title="DLF Cyber Park – Enterprise Control Room V3")
+st.set_page_config(layout="wide", page_title="DLF Cyber Park – Enterprise Control Room")
 
 DB = "enterprise.db"
-EXCEL_FILE = "Asset_cyberpark.xlsx"
+EXCEL_FILE = "DLF_Enterprise_Asset_Master_Template.xlsx"
 
-# ---------------- DLF THEME ---------------- #
+# ---------------- DLF CORPORATE THEME ---------------- #
 st.markdown("""
 <style>
 .stApp {background: linear-gradient(135deg,#071a2d,#0b2a45);}
-h1,h2,h3 {color:white;}
-.metric-card {
-background:#0f3a5d;padding:20px;border-radius:12px;color:white;
-box-shadow:0 0 20px rgba(0,0,0,0.3);
+h1,h2,h3,h4 {color:white;}
+div[data-testid="metric-container"] {
+   background-color: #0f3a5d;
+   border-radius: 10px;
+   padding: 15px;
+   color: white;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- DB INIT ---------------- #
+# ---------------- DATABASE INIT ---------------- #
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
     c.execute("""CREATE TABLE IF NOT EXISTS assets(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        asset_name TEXT,
-        location TEXT,
-        department TEXT
+        Asset_ID TEXT PRIMARY KEY,
+        Asset_Name TEXT,
+        Department TEXT,
+        Location TEXT,
+        Capacity TEXT,
+        Make TEXT,
+        Model TEXT,
+        Installation_Date TEXT,
+        Status TEXT,
+        Criticality TEXT
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS energy(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        asset_name TEXT,
-        kwh REAL,
-        date TEXT
+        Date TEXT,
+        Asset_ID TEXT,
+        kWh REAL,
+        BTU REAL,
+        Diesel_Liters REAL,
+        Cost_per_Unit REAL
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS amc(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        asset_name TEXT,
-        vendor TEXT,
-        expiry_date TEXT
+        Asset_ID TEXT,
+        Vendor_Name TEXT,
+        Contract_Type TEXT,
+        Start_Date TEXT,
+        Expiry_Date TEXT,
+        Contract_Value REAL,
+        Contact_Person TEXT
     )""")
 
-    c.execute("""CREATE TABLE IF NOT EXISTS attendance(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        employee TEXT,
-        login_time TEXT
+    c.execute("""CREATE TABLE IF NOT EXISTS maintenance(
+        Date TEXT,
+        Asset_ID TEXT,
+        Work_Type TEXT,
+        Description TEXT,
+        Downtime_Hours REAL,
+        Action_Taken TEXT,
+        Done_By TEXT,
+        OEM_Involved TEXT
     )""")
 
     conn.commit()
@@ -60,91 +78,35 @@ def init_db():
 
 init_db()
 
-# ---------------- AUTO CLASSIFICATION ---------------- #
-def classify(name):
-    n = name.upper()
-    if "AHU" in n or "FCU" in n or "CHILLER" in n:
-        return "HVAC"
-    elif "DG" in n:
-        return "DG"
-    elif "STP" in n:
-        return "STP"
-    elif "WTP" in n:
-        return "WTP"
-    elif "LIFT" in n:
-        return "LIFTS"
-    elif "CCTV" in n:
-        return "CCTV"
-    elif "FIRE" in n:
-        return "FIRE FIGHTING"
-    elif "PANEL" in n or "TRANSFORMER" in n:
-        return "ELECTRICAL"
-    elif "BMS" in n:
-        return "BMS"
-    elif "FACADE" in n:
-        return "FACADE"
-    elif "VENT" in n:
-        return "VENTILATION"
-    else:
-        return "GENERAL"
-
-# ---------------- FIRST RUN LOAD ---------------- #
-def load_excel_once():
+# ---------------- FIRST RUN EXCEL LOAD ---------------- #
+def load_excel():
     conn = sqlite3.connect(DB)
     existing = pd.read_sql("SELECT * FROM assets", conn)
 
     if existing.empty and os.path.exists(EXCEL_FILE):
-        df = pd.read_excel(EXCEL_FILE)
+        xl = pd.ExcelFile(EXCEL_FILE)
 
-        # Clean column names properly
-        df.columns = df.columns.str.strip()
+        # Load Asset Master
+        assets_df = xl.parse("ASSET_MASTER")
+        assets_df.to_sql("assets", conn, if_exists="append", index=False)
 
-        # Use exact correct names from your file
-        if "Asset Name" not in df.columns:
-            st.error("Column 'Asset Name' not found in Excel")
-            st.stop()
+        # Load Energy
+        energy_df = xl.parse("ENERGY_LOG")
+        energy_df.to_sql("energy", conn, if_exists="append", index=False)
 
-        asset_col = "Asset Name"
+        # Load AMC
+        amc_df = xl.parse("AMC_TRACKING")
+        amc_df.to_sql("amc", conn, if_exists="append", index=False)
 
-        if "Room (if Applicable)" in df.columns:
-            location_col = "Room (if Applicable)"
-        else:
-            location_col = None
-
-        df = df[[asset_col]].copy()
-        df.rename(columns={asset_col: "asset_name"}, inplace=True)
-
-        if location_col:
-            df["location"] = pd.read_excel(EXCEL_FILE)[location_col]
-        else:
-            df["location"] = "Not Specified"
-
-        df["department"] = df["asset_name"].apply(classify)
-
-        df[["asset_name", "location", "department"]].to_sql(
-            "assets", conn, if_exists="append", index=False
-        )
+        # Load Maintenance
+        maint_df = xl.parse("MAINTENANCE_LOG")
+        maint_df.to_sql("maintenance", conn, if_exists="append", index=False)
 
     conn.close()
 
-    if existing.empty and os.path.exists(EXCEL_FILE):
-        df = pd.read_excel(EXCEL_FILE)
-        df.columns = df.columns.str.strip()
+load_excel()
 
-        df = df[["Asset Name","Room(if applicable)"]]
-        df.rename(columns={
-            "Asset Name":"asset_name",
-            "Room(if applicable)":"location"
-        }, inplace=True)
-
-        df["department"] = df["asset_name"].apply(classify)
-        df.to_sql("assets", conn, if_exists="append", index=False)
-
-    conn.close()
-
-load_excel_once()
-
-# ---------------- LOGIN (HASHED) ---------------- #
+# ---------------- LOGIN ---------------- #
 def hash_pass(p):
     return hashlib.sha256(p.encode()).hexdigest()
 
@@ -154,7 +116,7 @@ if "login" not in st.session_state:
     st.session_state.login = False
 
 if not st.session_state.login:
-    st.title("DLF Cyber Park – Enterprise Control Room V3")
+    st.title("DLF Cyber Park – Enterprise Control Room")
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 
@@ -166,76 +128,52 @@ if not st.session_state.login:
             st.error("Invalid Credentials")
     st.stop()
 
-# ---------------- LOAD DATA ---------------- #
+# ---------------- LOAD DB DATA ---------------- #
 conn = sqlite3.connect(DB)
 assets = pd.read_sql("SELECT * FROM assets", conn)
 energy = pd.read_sql("SELECT * FROM energy", conn)
 amc = pd.read_sql("SELECT * FROM amc", conn)
-attendance = pd.read_sql("SELECT * FROM attendance", conn)
+maintenance = pd.read_sql("SELECT * FROM maintenance", conn)
 
 # ---------------- EXECUTIVE DASHBOARD ---------------- #
-st.title("🏢 Executive Command Dashboard")
+st.title("🏢 Executive Control Dashboard")
 
-col1,col2,col3,col4 = st.columns(4)
+col1, col2, col3, col4 = st.columns(4)
 
 total_assets = len(assets)
-total_energy = energy["kwh"].sum() if not energy.empty else 0
-total_btu = total_energy * 3412
+total_energy = energy["kWh"].sum() if not energy.empty else 0
+total_btu = energy["BTU"].sum() if not energy.empty else 0
 active_amc = len(amc)
 
 col1.metric("Total Assets", total_assets)
 col2.metric("Total Energy (kWh)", round(total_energy,2))
 col3.metric("Total BTU", round(total_btu,2))
-col4.metric("Active AMC", active_amc)
+col4.metric("Active AMC Contracts", active_amc)
 
-st.subheader("Department Distribution")
-st.bar_chart(assets["department"].value_counts())
+# ---------------- DEPARTMENT FILTER ---------------- #
+dept_filter = st.selectbox("Select Department", assets["Department"].unique())
+filtered_assets = assets[assets["Department"] == dept_filter]
 
-# ---------------- ENERGY ENTRY ---------------- #
-st.subheader("Energy Entry")
-if not assets.empty:
-    asset_select = st.selectbox("Select Asset", assets["asset_name"])
-    kwh = st.number_input("Enter kWh", min_value=0.0)
+st.subheader(f"{dept_filter} Assets")
+st.dataframe(filtered_assets)
 
-    if st.button("Save Energy"):
-        pd.DataFrame({
-            "asset_name":[asset_select],
-            "kwh":[kwh],
-            "date":[date.today()]
-        }).to_sql("energy", conn, if_exists="append", index=False)
-        st.success("Energy Saved")
-
-# ---------------- AMC TRACKING ---------------- #
-st.subheader("AMC Entry")
-if not assets.empty:
-    asset_select2 = st.selectbox("Asset for AMC", assets["asset_name"], key="amc")
-    vendor = st.text_input("Vendor Name")
-    expiry = st.date_input("Expiry Date")
-
-    if st.button("Save AMC"):
-        pd.DataFrame({
-            "asset_name":[asset_select2],
-            "vendor":[vendor],
-            "expiry_date":[expiry]
-        }).to_sql("amc", conn, if_exists="append", index=False)
-        st.success("AMC Saved")
+# ---------------- ENERGY SECTION ---------------- #
+st.subheader("Energy Trend")
+if not energy.empty:
+    energy_group = energy.groupby("Date")["kWh"].sum()
+    st.line_chart(energy_group)
 
 # ---------------- AMC ALERT ---------------- #
-st.subheader("AMC Expiry Alerts")
+st.subheader("AMC Expiry Alerts (Next 30 Days)")
 if not amc.empty:
-    amc["expiry_date"] = pd.to_datetime(amc["expiry_date"])
-    alert = amc[amc["expiry_date"] < pd.Timestamp.today() + pd.Timedelta(days=30)]
+    amc["Expiry_Date"] = pd.to_datetime(amc["Expiry_Date"])
+    alert = amc[amc["Expiry_Date"] < pd.Timestamp.today() + pd.Timedelta(days=30)]
     st.dataframe(alert)
 
-# ---------------- ATTENDANCE ---------------- #
-st.subheader("Attendance")
-if st.button("Mark Attendance"):
-    pd.DataFrame({
-        "employee":["admin"],
-        "login_time":[datetime.now()]
-    }).to_sql("attendance", conn, if_exists="append", index=False)
-    st.success("Attendance Marked")
-
-st.dataframe(attendance)
+# ---------------- MAINTENANCE SUMMARY ---------------- #
+st.subheader("Maintenance Summary")
+if not maintenance.empty:
+    summary = maintenance.groupby("Work_Type").size()
+    st.bar_chart(summary)
 
 conn.close()
