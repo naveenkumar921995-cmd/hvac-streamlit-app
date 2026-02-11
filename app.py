@@ -1,208 +1,273 @@
 import streamlit as st
+import sqlite3
 import pandas as pd
-import os
-from datetime import datetime
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
+from datetime import datetime, date
 
 # ---------------- CONFIG ---------------- #
-st.set_page_config(page_title="DLF HVAC Command Center", layout="wide")
-DATA_PATH = "data"
-os.makedirs(DATA_PATH, exist_ok=True)
+st.set_page_config(page_title="DLF Cyber Park - IFM Platform", layout="wide")
 
-# ---------------- SAFE CSV LOADER ---------------- #
-def load_csv(filename, columns):
-    path = os.path.join(DATA_PATH, filename)
+DB_NAME = "dlf_ifm.db"
 
-    if not os.path.exists(path):
-        df = pd.DataFrame(columns=columns)
-        df.to_csv(path, index=False)
-        return df
+DEPARTMENTS = [
+    "HVAC","DG","Electrical","STP","WTP","Ventilation",
+    "Lifts","CCTV","BMS","Fire Fighting","Facade","Compliance"
+]
 
-    try:
-        df = pd.read_csv(path)
-    except:
-        df = pd.DataFrame(columns=columns)
+# ---------------- DATABASE ---------------- #
+def get_connection():
+    return sqlite3.connect(DB_NAME, check_same_thread=False)
 
-    df.columns = df.columns.str.strip()
+conn = get_connection()
+cursor = conn.cursor()
 
-    for col in columns:
-        if col not in df.columns:
-            df[col] = ""
+# Create Tables
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password TEXT,
+    role TEXT
+)
+""")
 
-    return df
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    department TEXT,
+    asset_id TEXT,
+    asset_name TEXT,
+    location TEXT,
+    health TEXT,
+    amc_vendor TEXT,
+    amc_end DATE,
+    compliance_end DATE
+)
+""")
 
-# ---------------- LOAD DATA ---------------- #
-users = load_csv("users.csv", ["Employee_ID", "Name", "Password", "Role"])
-assets = load_csv("assets.csv", [
-    "Asset_ID","Asset_Name","Asset_Type","Location",
-    "Health","AMC_Vendor","AMC_End_Date"
-])
-energy = load_csv("energy.csv", [
-    "Date","Asset_ID","kWh","BTU","Cost_per_kWh"
-])
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS energy_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    department TEXT,
+    asset_id TEXT,
+    log_date DATE,
+    kwh REAL,
+    btu REAL,
+    cost_per_kwh REAL
+)
+""")
 
-# Convert numeric safely
-energy["kWh"] = pd.to_numeric(energy["kWh"], errors="coerce").fillna(0)
-energy["BTU"] = pd.to_numeric(energy["BTU"], errors="coerce").fillna(0)
-energy["Cost_per_kWh"] = pd.to_numeric(energy["Cost_per_kWh"], errors="coerce").fillna(0)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS work_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    department TEXT,
+    asset_id TEXT,
+    engineer TEXT,
+    log_date DATE,
+    work_type TEXT,
+    remarks TEXT,
+    status TEXT
+)
+""")
 
-# ---------------- DEFAULT LOGIN USER ---------------- #
-if users.empty:
-    users.loc[len(users)] = ["admin","Admin","admin123","Admin"]
-    users.to_csv(os.path.join(DATA_PATH,"users.csv"), index=False)
+conn.commit()
+
+# Default Admin
+cursor.execute("SELECT * FROM users WHERE username='admin'")
+if not cursor.fetchone():
+    cursor.execute("INSERT INTO users (username,password,role) VALUES (?,?,?)",
+                   ("admin","admin123","Admin"))
+    conn.commit()
 
 # ---------------- LOGIN ---------------- #
 st.sidebar.title("🔐 Login")
 
-username = st.sidebar.text_input("User ID")
+username = st.sidebar.text_input("Username")
 password = st.sidebar.text_input("Password", type="password")
 
 if st.sidebar.button("Login"):
-    user = users[(users["Employee_ID"] == username) & (users["Password"] == password)]
-    if not user.empty:
-        st.session_state["logged_in"] = True
-        st.session_state["user"] = user.iloc[0]["Name"]
-        st.session_state["role"] = user.iloc[0]["Role"]
+    cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
+                   (username,password))
+    user = cursor.fetchone()
+    if user:
+        st.session_state["logged"] = True
+        st.session_state["role"] = user[3]
+        st.session_state["user"] = user[1]
     else:
-        st.sidebar.error("Invalid credentials")
+        st.sidebar.error("Invalid Credentials")
 
-if "logged_in" not in st.session_state:
+if "logged" not in st.session_state:
     st.stop()
 
 st.sidebar.success(f"Welcome {st.session_state['user']}")
 
-menu = st.sidebar.radio("Navigation", [
-    "Wall Dashboard",
-    "Assets",
-    "Energy",
-    "AMC Management",
-    "PDF Report"
+menu = st.sidebar.radio("Navigation",[
+    "Live Wall Dashboard",
+    "Asset Management",
+    "Energy Monitoring",
+    "Work Logs",
+    "AMC & Compliance Alerts"
 ])
 
-# ======================================================
-# 1️⃣ WALL DASHBOARD
-# ======================================================
-if menu == "Wall Dashboard":
-    st.title("🏢 All HVAC On One Screen")
+# ==========================================================
+# 1️⃣ LIVE WALL DASHBOARD
+# ==========================================================
+if menu == "Live Wall Dashboard":
+    st.title("🏢 All Departments - Live Command Center")
 
-    total_assets = len(assets)
-    attention = len(assets[assets["Health"]=="Attention"])
-    ok_assets = len(assets[assets["Health"]=="OK"])
-
-    total_kwh = energy["kWh"].sum()
-    total_btu = energy["BTU"].sum()
-    total_cost = (energy["kWh"] * energy["Cost_per_kWh"]).sum()
+    assets_df = pd.read_sql("SELECT * FROM assets", conn)
+    energy_df = pd.read_sql("SELECT * FROM energy_logs", conn)
 
     col1,col2,col3,col4 = st.columns(4)
-    col1.metric("Total Assets", total_assets)
-    col2.metric("Attention Required", attention)
-    col3.metric("Energy (kWh)", f"{total_kwh:,.0f}")
-    col4.metric("Energy Cost ₹", f"{total_cost:,.0f}")
 
-    st.dataframe(assets, use_container_width=True)
+    col1.metric("Total Assets", len(assets_df))
+    col2.metric("Attention Required",
+                len(assets_df[assets_df["health"]=="Attention"]))
+    col3.metric("Total Energy (kWh)",
+                round(energy_df["kwh"].sum() if not energy_df.empty else 0,2))
+    col4.metric("Total Cost ₹",
+                round((energy_df["kwh"]*energy_df["cost_per_kwh"]).sum()
+                      if not energy_df.empty else 0,2))
 
-# ======================================================
-# 2️⃣ ASSETS
-# ======================================================
-elif menu == "Assets":
-    st.title("HVAC Asset Management")
+    st.subheader("Department Summary")
+
+    if not assets_df.empty:
+        summary = assets_df.groupby("department")["asset_id"].count()
+        st.bar_chart(summary)
+
+    st.dataframe(assets_df, use_container_width=True)
+
+# ==========================================================
+# 2️⃣ ASSET MANAGEMENT
+# ==========================================================
+elif menu == "Asset Management":
+    st.title("Asset Master Management")
+
+    department = st.selectbox("Department", DEPARTMENTS)
 
     with st.form("asset_form"):
         asset_id = st.text_input("Asset ID")
         asset_name = st.text_input("Asset Name")
-        asset_type = st.text_input("Asset Type")
         location = st.text_input("Location")
-        health = st.selectbox("Health", ["OK","Attention"])
+        health = st.selectbox("Health",["OK","Attention"])
         vendor = st.text_input("AMC Vendor")
-        amc_date = st.date_input("AMC End Date")
-        submit = st.form_submit_button("Save")
+        amc_end = st.date_input("AMC End Date")
+        compliance_end = st.date_input("Compliance Expiry Date")
+        submit = st.form_submit_button("Save Asset")
 
     if submit:
-        new_asset = {
-            "Asset_ID": asset_id,
-            "Asset_Name": asset_name,
-            "Asset_Type": asset_type,
-            "Location": location,
-            "Health": health,
-            "AMC_Vendor": vendor,
-            "AMC_End_Date": amc_date
-        }
-        assets = pd.concat([assets, pd.DataFrame([new_asset])], ignore_index=True)
-        assets.to_csv(os.path.join(DATA_PATH,"assets.csv"), index=False)
-        st.success("Asset Added")
+        cursor.execute("""
+        INSERT INTO assets
+        (department,asset_id,asset_name,location,health,
+         amc_vendor,amc_end,compliance_end)
+        VALUES (?,?,?,?,?,?,?,?)
+        """,(department,asset_id,asset_name,location,
+             health,vendor,amc_end,compliance_end))
+        conn.commit()
+        st.success("Asset Added Successfully")
 
-    st.dataframe(assets, use_container_width=True)
+    df = pd.read_sql("SELECT * FROM assets WHERE department=?",
+                     conn, params=(department,))
+    st.dataframe(df, use_container_width=True)
 
-# ======================================================
-# 3️⃣ ENERGY
-# ======================================================
-elif menu == "Energy":
+# ==========================================================
+# 3️⃣ ENERGY MONITORING
+# ==========================================================
+elif menu == "Energy Monitoring":
     st.title("Energy + BTU Monitoring")
 
-    with st.form("energy_form"):
-        asset = st.selectbox("Asset", assets["Asset_ID"])
-        kwh = st.number_input("kWh", min_value=0.0)
-        btu = st.number_input("BTU", min_value=0.0)
-        cost = st.number_input("Cost per kWh ₹", min_value=0.0)
-        submit = st.form_submit_button("Submit")
+    department = st.selectbox("Department", DEPARTMENTS)
 
-    if submit:
-        new_energy = {
-            "Date": datetime.now().date(),
-            "Asset_ID": asset,
-            "kWh": kwh,
-            "BTU": btu,
-            "Cost_per_kWh": cost
-        }
-        energy = pd.concat([energy, pd.DataFrame([new_energy])], ignore_index=True)
-        energy.to_csv(os.path.join(DATA_PATH,"energy.csv"), index=False)
-        st.success("Energy Data Added")
+    assets_df = pd.read_sql(
+        "SELECT asset_id FROM assets WHERE department=?",
+        conn, params=(department,)
+    )
 
-    st.dataframe(energy, use_container_width=True)
+    if not assets_df.empty:
+        asset_id = st.selectbox("Asset", assets_df["asset_id"])
 
-# ======================================================
-# 4️⃣ AMC MANAGEMENT
-# ======================================================
-elif menu == "AMC Management":
-    st.title("AMC Vendor Tracking")
+        with st.form("energy_form"):
+            kwh = st.number_input("kWh", min_value=0.0)
+            btu = st.number_input("BTU", min_value=0.0)
+            cost = st.number_input("Cost per kWh ₹", min_value=0.0)
+            submit = st.form_submit_button("Submit")
 
-    today = datetime.now().date()
-    assets["AMC_End_Date"] = pd.to_datetime(assets["AMC_End_Date"], errors="coerce")
+        if submit:
+            cursor.execute("""
+            INSERT INTO energy_logs
+            (department,asset_id,log_date,kwh,btu,cost_per_kwh)
+            VALUES (?,?,?,?,?,?)
+            """,(department,asset_id,date.today(),kwh,btu,cost))
+            conn.commit()
+            st.success("Energy Log Added")
 
-    expiring = assets[assets["AMC_End_Date"] <= pd.Timestamp(today)]
+    df = pd.read_sql("SELECT * FROM energy_logs", conn)
+    st.dataframe(df, use_container_width=True)
 
-    if not expiring.empty:
-        st.error("⚠ AMC Expired / Due")
-        st.dataframe(expiring)
-    else:
-        st.success("All AMC Valid")
+# ==========================================================
+# 4️⃣ WORK LOGS
+# ==========================================================
+elif menu == "Work Logs":
+    st.title("Daily Work Logs")
 
-# ======================================================
-# 5️⃣ PDF REPORT
-# ======================================================
-elif menu == "PDF Report":
-    st.title("Download Monthly PDF Report")
+    department = st.selectbox("Department", DEPARTMENTS)
 
-    if st.button("Generate PDF"):
-        filename = "HVAC_Report.pdf"
-        doc = SimpleDocTemplate(filename)
-        elements = []
+    assets_df = pd.read_sql(
+        "SELECT asset_id FROM assets WHERE department=?",
+        conn, params=(department,)
+    )
 
-        styles = getSampleStyleSheet()
-        elements.append(Paragraph("DLF HVAC Monthly Report", styles["Heading1"]))
-        elements.append(Spacer(1,0.3*inch))
+    if not assets_df.empty:
+        asset_id = st.selectbox("Asset", assets_df["asset_id"])
+        work_type = st.selectbox("Work Type",
+                                 ["Routine","Preventive","Breakdown"])
+        remarks = st.text_area("Remarks")
+        status = st.selectbox("Status",["Closed","Open"])
 
-        elements.append(Paragraph(f"Total Assets: {len(assets)}", styles["Normal"]))
-        elements.append(Paragraph(f"Total Energy: {energy['kWh'].sum()} kWh", styles["Normal"]))
-        elements.append(Paragraph(f"Total Cost: ₹ {(energy['kWh']*energy['Cost_per_kWh']).sum()}", styles["Normal"]))
+        if st.button("Submit Log"):
+            cursor.execute("""
+            INSERT INTO work_logs
+            (department,asset_id,engineer,log_date,work_type,remarks,status)
+            VALUES (?,?,?,?,?,?,?)
+            """,(department,asset_id,
+                 st.session_state["user"],
+                 date.today(),work_type,remarks,status))
+            conn.commit()
+            st.success("Work Log Saved")
 
-        doc.build(elements)
+    df = pd.read_sql("SELECT * FROM work_logs", conn)
+    st.dataframe(df, use_container_width=True)
 
-        with open(filename,"rb") as f:
-            st.download_button("Download Report", f, file_name=filename)
+# ==========================================================
+# 5️⃣ AMC & COMPLIANCE ALERTS
+# ==========================================================
+elif menu == "AMC & Compliance Alerts":
+    st.title("AMC & Compliance Expiry Alerts")
 
-        st.success("PDF Generated")
+    today = date.today()
+
+    assets_df = pd.read_sql("SELECT * FROM assets", conn)
+
+    if not assets_df.empty:
+        assets_df["amc_end"] = pd.to_datetime(assets_df["amc_end"])
+        assets_df["compliance_end"] = pd.to_datetime(
+            assets_df["compliance_end"])
+
+        amc_alert = assets_df[
+            assets_df["amc_end"] <= pd.Timestamp(today)
+        ]
+
+        compliance_alert = assets_df[
+            assets_df["compliance_end"] <= pd.Timestamp(today)
+        ]
+
+        if not amc_alert.empty:
+            st.error("⚠ AMC Expired / Due")
+            st.dataframe(amc_alert)
+
+        if not compliance_alert.empty:
+            st.error("⚠ Compliance Expired / Due")
+            st.dataframe(compliance_alert)
+
+        if amc_alert.empty and compliance_alert.empty:
+            st.success("All AMC & Compliance Valid")
+
