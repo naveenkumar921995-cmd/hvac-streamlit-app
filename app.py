@@ -6,6 +6,12 @@ from reports import generate_pdf
 from alerts import check_amc_alerts
 
 create_tables()
+from auth import create_user
+
+try:
+    create_user("admin", "admin123", "Admin")
+except:
+    pass
 
 st.set_page_config(page_title="DLF Cyber Park - Executive Dashboard", layout="wide")
 
