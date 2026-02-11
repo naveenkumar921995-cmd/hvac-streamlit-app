@@ -1,92 +1,207 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime
-from database import init_db, get_connection
-from auth import create_admin
-from theme import load_theme
-from utils import classify_asset
+import sqlite3
+import os
+from datetime import datetime, date
+import hashlib
 
-# INIT SYSTEM
-init_db()
-create_admin()
-load_theme()
+# ---------------- CONFIG ---------------- #
+st.set_page_config(layout="wide", page_title="DLF Cyber Park – Enterprise Control Room V3")
 
-st.title("🏢 DLF CYBER PARK – ENTERPRISE CONTROL ROOM V3")
+DB = "enterprise.db"
+EXCEL_FILE = "Asset_cyberpark.xlsx"
 
-# LOGIN
-if "user" not in st.session_state:
-    st.session_state.user = None
+# ---------------- DLF THEME ---------------- #
+st.markdown("""
+<style>
+.stApp {background: linear-gradient(135deg,#071a2d,#0b2a45);}
+h1,h2,h3 {color:white;}
+.metric-card {
+background:#0f3a5d;padding:20px;border-radius:12px;color:white;
+box-shadow:0 0 20px rgba(0,0,0,0.3);
+}
+</style>
+""", unsafe_allow_html=True)
 
-username = st.sidebar.text_input("Username")
-password = st.sidebar.text_input("Password", type="password")
-
-if st.sidebar.button("Login"):
-    conn = get_connection()
+# ---------------- DB INIT ---------------- #
+def init_db():
+    conn = sqlite3.connect(DB)
     c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE username=?", (username,))
-    user = c.fetchone()
 
-    if user:
-        import bcrypt
-        if bcrypt.checkpw(password.encode(), user[2]):
-            st.session_state.user = username
-            st.success("Login Successful")
-        else:
-            st.error("Wrong Password")
+    c.execute("""CREATE TABLE IF NOT EXISTS assets(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_name TEXT,
+        location TEXT,
+        department TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS energy(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_name TEXT,
+        kwh REAL,
+        date TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS amc(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_name TEXT,
+        vendor TEXT,
+        expiry_date TEXT
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS attendance(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee TEXT,
+        login_time TEXT
+    )""")
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ---------------- AUTO CLASSIFICATION ---------------- #
+def classify(name):
+    n = name.upper()
+    if "AHU" in n or "FCU" in n or "CHILLER" in n:
+        return "HVAC"
+    elif "DG" in n:
+        return "DG"
+    elif "STP" in n:
+        return "STP"
+    elif "WTP" in n:
+        return "WTP"
+    elif "LIFT" in n:
+        return "LIFTS"
+    elif "CCTV" in n:
+        return "CCTV"
+    elif "FIRE" in n:
+        return "FIRE FIGHTING"
+    elif "PANEL" in n or "TRANSFORMER" in n:
+        return "ELECTRICAL"
+    elif "BMS" in n:
+        return "BMS"
+    elif "FACADE" in n:
+        return "FACADE"
+    elif "VENT" in n:
+        return "VENTILATION"
     else:
-        st.error("User Not Found")
+        return "GENERAL"
 
-# DASHBOARD
-if st.session_state.user:
+# ---------------- FIRST RUN LOAD ---------------- #
+def load_excel_once():
+    conn = sqlite3.connect(DB)
+    existing = pd.read_sql("SELECT * FROM assets", conn)
 
-    conn = get_connection()
+    if existing.empty and os.path.exists(EXCEL_FILE):
+        df = pd.read_excel(EXCEL_FILE)
+        df.columns = df.columns.str.strip()
 
-    df_assets = pd.read_sql("SELECT * FROM assets", conn)
-    df_energy = pd.read_sql("SELECT * FROM energy", conn)
-    df_amc = pd.read_sql("SELECT * FROM amc", conn)
+        df = df[["Asset Name","Room(if applicable)"]]
+        df.rename(columns={
+            "Asset Name":"asset_name",
+            "Room(if applicable)":"location"
+        }, inplace=True)
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Total Assets", len(df_assets))
-    col2.metric("Total Energy (kWh)", df_energy["kwh"].sum() if not df_energy.empty else 0)
-    col3.metric("Total BTU", df_energy["btu"].sum() if not df_energy.empty else 0)
-    col4.metric("Active AMC", len(df_amc))
-
-    st.subheader("Department Distribution")
-
-    if not df_assets.empty:
-        fig = px.pie(df_assets, names="department")
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Live Control Wall")
-
-    departments = df_assets["department"].unique() if not df_assets.empty else []
-
-    for dept in departments:
-        count = len(df_assets[df_assets["department"] == dept])
-        st.markdown(f"""
-        <div style='background:#132f4c;padding:20px;border-radius:10px;margin-bottom:10px'>
-        <h3>{dept} - {count} Assets</h3>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # PDF REPORT
-    if st.button("Generate Monthly Report"):
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-        from reportlab.lib.styles import getSampleStyleSheet
-
-        doc = SimpleDocTemplate("monthly_report.pdf")
-        styles = getSampleStyleSheet()
-        elements = []
-
-        elements.append(Paragraph("DLF Cyber Park - Monthly Report", styles["Title"]))
-        elements.append(Spacer(1, 12))
-        elements.append(Paragraph(f"Total Assets: {len(df_assets)}", styles["Normal"]))
-
-        doc.build(elements)
-
-        with open("monthly_report.pdf", "rb") as f:
-            st.download_button("Download Report", f, "Monthly_Report.pdf")
+        df["department"] = df["asset_name"].apply(classify)
+        df.to_sql("assets", conn, if_exists="append", index=False)
 
     conn.close()
+
+load_excel_once()
+
+# ---------------- LOGIN (HASHED) ---------------- #
+def hash_pass(p):
+    return hashlib.sha256(p.encode()).hexdigest()
+
+USERS = {"admin": hash_pass("Admin@123")}
+
+if "login" not in st.session_state:
+    st.session_state.login = False
+
+if not st.session_state.login:
+    st.title("DLF Cyber Park – Enterprise Control Room V3")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if u in USERS and USERS[u] == hash_pass(p):
+            st.session_state.login = True
+            st.success("Login Successful")
+        else:
+            st.error("Invalid Credentials")
+    st.stop()
+
+# ---------------- LOAD DATA ---------------- #
+conn = sqlite3.connect(DB)
+assets = pd.read_sql("SELECT * FROM assets", conn)
+energy = pd.read_sql("SELECT * FROM energy", conn)
+amc = pd.read_sql("SELECT * FROM amc", conn)
+attendance = pd.read_sql("SELECT * FROM attendance", conn)
+
+# ---------------- EXECUTIVE DASHBOARD ---------------- #
+st.title("🏢 Executive Command Dashboard")
+
+col1,col2,col3,col4 = st.columns(4)
+
+total_assets = len(assets)
+total_energy = energy["kwh"].sum() if not energy.empty else 0
+total_btu = total_energy * 3412
+active_amc = len(amc)
+
+col1.metric("Total Assets", total_assets)
+col2.metric("Total Energy (kWh)", round(total_energy,2))
+col3.metric("Total BTU", round(total_btu,2))
+col4.metric("Active AMC", active_amc)
+
+st.subheader("Department Distribution")
+st.bar_chart(assets["department"].value_counts())
+
+# ---------------- ENERGY ENTRY ---------------- #
+st.subheader("Energy Entry")
+if not assets.empty:
+    asset_select = st.selectbox("Select Asset", assets["asset_name"])
+    kwh = st.number_input("Enter kWh", min_value=0.0)
+
+    if st.button("Save Energy"):
+        pd.DataFrame({
+            "asset_name":[asset_select],
+            "kwh":[kwh],
+            "date":[date.today()]
+        }).to_sql("energy", conn, if_exists="append", index=False)
+        st.success("Energy Saved")
+
+# ---------------- AMC TRACKING ---------------- #
+st.subheader("AMC Entry")
+if not assets.empty:
+    asset_select2 = st.selectbox("Asset for AMC", assets["asset_name"], key="amc")
+    vendor = st.text_input("Vendor Name")
+    expiry = st.date_input("Expiry Date")
+
+    if st.button("Save AMC"):
+        pd.DataFrame({
+            "asset_name":[asset_select2],
+            "vendor":[vendor],
+            "expiry_date":[expiry]
+        }).to_sql("amc", conn, if_exists="append", index=False)
+        st.success("AMC Saved")
+
+# ---------------- AMC ALERT ---------------- #
+st.subheader("AMC Expiry Alerts")
+if not amc.empty:
+    amc["expiry_date"] = pd.to_datetime(amc["expiry_date"])
+    alert = amc[amc["expiry_date"] < pd.Timestamp.today() + pd.Timedelta(days=30)]
+    st.dataframe(alert)
+
+# ---------------- ATTENDANCE ---------------- #
+st.subheader("Attendance")
+if st.button("Mark Attendance"):
+    pd.DataFrame({
+        "employee":["admin"],
+        "login_time":[datetime.now()]
+    }).to_sql("attendance", conn, if_exists="append", index=False)
+    st.success("Attendance Marked")
+
+st.dataframe(attendance)
+
+conn.close()
