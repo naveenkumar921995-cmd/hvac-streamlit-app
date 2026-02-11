@@ -1,16 +1,16 @@
 import sqlite3
 
-DB_NAME = "site.db"
+DB_NAME = "data/controlroom.db"
 
 def get_connection():
     conn = sqlite3.connect(DB_NAME, check_same_thread=False)
     return conn
 
-def create_tables():
+def init_db():
     conn = get_connection()
     c = conn.cursor()
 
-    # Users
+    # USERS
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,38 +20,45 @@ def create_tables():
     )
     """)
 
-    # Assets
+    # ASSETS
     c.execute("""
     CREATE TABLE IF NOT EXISTS assets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         asset_name TEXT,
         department TEXT,
         location TEXT,
-        health INTEGER,
-        amc_end TEXT,
-        compliance_end TEXT
+        health INTEGER DEFAULT 100
     )
     """)
 
-    # Energy
+    # ENERGY
     c.execute("""
     CREATE TABLE IF NOT EXISTS energy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_id INTEGER,
         date TEXT,
-        asset_name TEXT,
         kwh REAL,
-        cost_per_kwh REAL
+        btu REAL,
+        cost REAL
     )
     """)
 
-    # Attendance
+    # AMC
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS amc (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_id INTEGER,
+        vendor TEXT,
+        expiry_date TEXT
+    )
+    """)
+
+    # ATTENDANCE
     c.execute("""
     CREATE TABLE IF NOT EXISTS attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        date TEXT,
-        login_time TEXT,
-        logout_time TEXT
+        user TEXT,
+        login_time TEXT
     )
     """)
 
