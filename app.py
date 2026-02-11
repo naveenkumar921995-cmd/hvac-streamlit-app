@@ -5,25 +5,55 @@ import os
 import bcrypt
 from datetime import datetime, date
 import plotly.express as px
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
 
-# --------------------------------------------------
-# CONFIG
-# --------------------------------------------------
+# -------------------------------
+# PAGE CONFIG
+# -------------------------------
 st.set_page_config(page_title="DLF Cyber Park IFM", layout="wide")
 
-DB_NAME = "cyberpark.db"
+# -------------------------------
+# DLF CORPORATE THEME
+# -------------------------------
+st.markdown("""
+<style>
+body {
+    background-color: #0d1b2a;
+}
+.stApp {
+    background-color: #0d1b2a;
+    color: white;
+}
+h1, h2, h3 {
+    color: #d4af37;
+}
+div[data-testid="metric-container"] {
+    background-color: #1b263b;
+    padding: 15px;
+    border-radius: 10px;
+    border: 1px solid #d4af37;
+}
+.sidebar .sidebar-content {
+    background-color: #1b263b;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# --------------------------------------------------
-# DATABASE CONNECTION
-# --------------------------------------------------
+DB_NAME = "cyberpark.db"
 conn = sqlite3.connect(DB_NAME, check_same_thread=False)
 cursor = conn.cursor()
 
-# --------------------------------------------------
-# CREATE TABLES
-# --------------------------------------------------
+# -------------------------------
+# DATABASE TABLES
+# -------------------------------
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_name TEXT,
+    department TEXT,
+    health TEXT DEFAULT 'OK'
+)
+""")
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,42 +63,12 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS assets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asset_name TEXT,
-    department TEXT,
-    health TEXT DEFAULT 'OK',
-    amc_end DATE,
-    compliance_end DATE
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS energy_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    asset_name TEXT,
-    log_date DATE,
-    kwh REAL,
-    btu REAL,
-    cost REAL
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS attendance (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT,
-    login_time TEXT
-)
-""")
-
 conn.commit()
 
-# --------------------------------------------------
+# -------------------------------
 # AUTO CREATE ADMIN
-# --------------------------------------------------
-def create_default_admin():
+# -------------------------------
+def create_admin():
     cursor.execute("SELECT * FROM users WHERE username='admin'")
     if not cursor.fetchone():
         hashed = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt())
@@ -76,16 +76,16 @@ def create_default_admin():
                        ("admin", hashed, "Admin"))
         conn.commit()
 
-create_default_admin()
+create_admin()
 
-# --------------------------------------------------
-# AUTO IMPORT ASSET FILE
-# --------------------------------------------------
+# -------------------------------
+# SMART DEPARTMENT DETECTION
+# -------------------------------
 def detect_department(name):
     name = name.lower()
-    if "ahu" in name or "chiller" in name or "hvac" in name:
+    if any(x in name for x in ["ahu","chiller","hvac"]):
         return "HVAC"
-    elif "dg" in name or "generator" in name:
+    elif any(x in name for x in ["dg","generator"]):
         return "DG"
     elif "stp" in name:
         return "STP"
@@ -99,7 +99,7 @@ def detect_department(name):
         return "CCTV"
     elif "bms" in name:
         return "BMS"
-    elif "electrical" in name or "panel" in name:
+    elif any(x in name for x in ["panel","electrical"]):
         return "Electrical"
     elif "vent" in name:
         return "Ventilation"
@@ -108,163 +108,90 @@ def detect_department(name):
     else:
         return "General"
 
+# -------------------------------
+# FIXED ASSET IMPORT
+# -------------------------------
 def import_assets():
     cursor.execute("SELECT COUNT(*) FROM assets")
     if cursor.fetchone()[0] == 0:
         if os.path.exists("Asset_cyberpark.xlsx"):
             df = pd.read_excel("Asset_cyberpark.xlsx")
-            col = df.columns[0]
-            for asset in df[col].dropna():
+
+            # Remove completely empty columns
+            df = df.dropna(axis=1, how='all')
+
+            # Auto-detect name column
+            name_col = None
+            for col in df.columns:
+                if any(word in col.lower() for word in ["equipment","asset","name"]):
+                    name_col = col
+                    break
+
+            if name_col is None:
+                name_col = df.columns[1]  # fallback
+
+            for asset in df[name_col].dropna():
                 dept = detect_department(str(asset))
                 cursor.execute("INSERT INTO assets (asset_name, department) VALUES (?,?)",
                                (str(asset), dept))
+
             conn.commit()
 
 import_assets()
 
-# --------------------------------------------------
+# -------------------------------
 # LOGIN
-# --------------------------------------------------
-def login():
-    st.sidebar.title("Login")
-    username = st.sidebar.text_input("Username")
-    password = st.sidebar.text_input("Password", type="password")
+# -------------------------------
+st.sidebar.title("DLF Cyber Park Login")
 
-    if st.sidebar.button("Login"):
-        cursor.execute("SELECT password, role FROM users WHERE username=?", (username,))
-        user = cursor.fetchone()
-        if user and bcrypt.checkpw(password.encode(), user[0]):
-            st.session_state["user"] = username
-            st.session_state["role"] = user[1]
-            cursor.execute("INSERT INTO attendance (username, login_time) VALUES (?,?)",
-                           (username, str(datetime.now())))
-            conn.commit()
-        else:
-            st.sidebar.error("Invalid credentials")
+username = st.sidebar.text_input("Username")
+password = st.sidebar.text_input("Password", type="password")
+
+if st.sidebar.button("Login"):
+    cursor.execute("SELECT password, role FROM users WHERE username=?", (username,))
+    user = cursor.fetchone()
+    if user and bcrypt.checkpw(password.encode(), user[0]):
+        st.session_state["user"] = username
+        st.session_state["role"] = user[1]
+    else:
+        st.sidebar.error("Invalid Credentials")
 
 if "user" not in st.session_state:
-    login()
     st.stop()
 
 st.sidebar.success(f"{st.session_state['user']} ({st.session_state['role']})")
 
-# --------------------------------------------------
-# MENU
-# --------------------------------------------------
 menu = st.sidebar.radio("Navigation", [
     "Executive Dashboard",
-    "All Assets Live Wall",
-    "Energy & BTU",
-    "AMC / Compliance",
-    "Attendance",
-    "Monthly PDF Report"
+    "All Assets Wall"
 ])
 
-# --------------------------------------------------
+# -------------------------------
 # EXECUTIVE DASHBOARD
-# --------------------------------------------------
+# -------------------------------
 if menu == "Executive Dashboard":
-    st.title("DLF Cyber Park – Executive Dashboard")
 
-    assets_df = pd.read_sql("SELECT * FROM assets", conn)
-    energy_df = pd.read_sql("SELECT * FROM energy_logs", conn)
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Assets", len(assets_df))
-    col2.metric("Departments", assets_df["department"].nunique())
-    col3.metric("Attention Assets",
-                len(assets_df[assets_df["health"] != "OK"]))
-
-    fig = px.pie(assets_df, names="department", title="Department Distribution")
-    st.plotly_chart(fig, use_container_width=True)
-
-# --------------------------------------------------
-# LIVE WALL
-# --------------------------------------------------
-elif menu == "All Assets Live Wall":
-    st.title("All Departments – Live Asset Wall")
-    df = pd.read_sql("SELECT asset_name, department, health FROM assets", conn)
-    st.dataframe(df)
-
-# --------------------------------------------------
-# ENERGY
-# --------------------------------------------------
-elif menu == "Energy & BTU":
-    st.title("Energy & BTU Management")
-
-    asset_list = pd.read_sql("SELECT asset_name FROM assets", conn)["asset_name"].tolist()
-
-    with st.form("energy"):
-        asset = st.selectbox("Asset", asset_list)
-        kwh = st.number_input("kWh")
-        btu = st.number_input("BTU")
-        cost = st.number_input("Cost")
-        submit = st.form_submit_button("Submit")
-
-    if submit:
-        cursor.execute("""
-        INSERT INTO energy_logs (asset_name, log_date, kwh, btu, cost)
-        VALUES (?,?,?,?,?)
-        """, (asset, str(date.today()), kwh, btu, cost))
-        conn.commit()
-        st.success("Energy log saved")
-
-    df = pd.read_sql("SELECT * FROM energy_logs", conn)
-    if not df.empty:
-        fig = px.bar(df, x="asset_name", y="kwh", title="Energy Consumption")
-        st.plotly_chart(fig)
-
-# --------------------------------------------------
-# AMC
-# --------------------------------------------------
-elif menu == "AMC / Compliance":
-    st.title("AMC & Compliance Tracking")
+    st.title("DLF Cyber Park – Executive Command Center")
 
     df = pd.read_sql("SELECT * FROM assets", conn)
 
-    asset = st.selectbox("Asset", df["asset_name"])
-    amc_date = st.date_input("AMC End Date")
-    comp_date = st.date_input("Compliance End Date")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Assets", len(df))
+    col2.metric("Departments", df["department"].nunique())
+    col3.metric("Healthy Assets", len(df[df["health"]=="OK"]))
 
-    if st.button("Update"):
-        cursor.execute("""
-        UPDATE assets SET amc_end=?, compliance_end=? WHERE asset_name=?
-        """, (str(amc_date), str(comp_date), asset))
-        conn.commit()
-        st.success("Updated")
+    fig = px.pie(df, names="department",
+                 color_discrete_sequence=["#d4af37","#f4d35e","#ee964b",
+                                          "#0d3b66","#faf0ca","#3d5a80"])
+    st.plotly_chart(fig, use_container_width=True)
 
-    today = str(date.today())
-    expiring = df[(df["amc_end"] < today) | (df["compliance_end"] < today)]
-    st.subheader("Expiring / Expired Assets")
-    st.dataframe(expiring)
+# -------------------------------
+# LIVE WALL
+# -------------------------------
+elif menu == "All Assets Wall":
 
-# --------------------------------------------------
-# ATTENDANCE
-# --------------------------------------------------
-elif menu == "Attendance":
-    st.title("Attendance Log")
-    df = pd.read_sql("SELECT * FROM attendance", conn)
-    st.dataframe(df)
+    st.title("All Systems Live Wall")
 
-# --------------------------------------------------
-# PDF REPORT
-# --------------------------------------------------
-elif menu == "Monthly PDF Report":
-    st.title("Generate Monthly Report")
+    df = pd.read_sql("SELECT asset_name, department, health FROM assets", conn)
 
-    if st.button("Generate PDF"):
-        doc = SimpleDocTemplate("Monthly_Report.pdf")
-        styles = getSampleStyleSheet()
-        elements = []
-
-        elements.append(Paragraph("DLF Cyber Park Monthly Report", styles["Title"]))
-        elements.append(Spacer(1, 20))
-
-        assets_df = pd.read_sql("SELECT * FROM assets", conn)
-        elements.append(Paragraph(f"Total Assets: {len(assets_df)}", styles["Normal"]))
-
-        doc.build(elements)
-
-        with open("Monthly_Report.pdf", "rb") as f:
-            st.download_button("Download Report", f, "Monthly_Report.pdf")
-
+    st.dataframe(df, use_container_width=True)
