@@ -95,6 +95,42 @@ def load_excel_once():
 
     if existing.empty and os.path.exists(EXCEL_FILE):
         df = pd.read_excel(EXCEL_FILE)
+
+        # Clean column names
+        df.columns = df.columns.str.strip().str.replace("\n"," ").str.replace("  "," ")
+
+        # Auto detect asset column
+        asset_col = None
+        location_col = None
+
+        for col in df.columns:
+            if "asset" in col.lower() and "name" in col.lower():
+                asset_col = col
+            if "room" in col.lower() or "location" in col.lower():
+                location_col = col
+
+        if asset_col is None:
+            st.error("Asset Name column not found in Excel file")
+            st.stop()
+
+        df = df[[asset_col]]
+        df.rename(columns={asset_col: "asset_name"}, inplace=True)
+
+        if location_col:
+            df["location"] = df[location_col]
+        else:
+            df["location"] = "Not Specified"
+
+        df["department"] = df["asset_name"].apply(classify)
+
+        df[["asset_name","location","department"]].to_sql(
+            "assets", conn, if_exists="append", index=False
+        )
+
+    conn.close()
+
+    if existing.empty and os.path.exists(EXCEL_FILE):
+        df = pd.read_excel(EXCEL_FILE)
         df.columns = df.columns.str.strip()
 
         df = df[["Asset Name","Room(if applicable)"]]
