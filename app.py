@@ -11,8 +11,10 @@ DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ---------------- PASSWORD HASH ----------------
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+match = users[
+    (users["Employee_ID"] == emp_id) &
+    (users["Password"] == password)
+]
 
 # ---------------- SAFE CSV LOADER ----------------
 def load_csv(file, columns):
@@ -167,3 +169,4 @@ elif menu == "Reports":
 elif menu == "Attendance":
     st.title("Attendance Record")
     st.dataframe(attendance, use_container_width=True)
+
