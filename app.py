@@ -1,204 +1,208 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 import os
+from datetime import datetime
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
-from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
 
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="DLF Cyber Park HVAC Control", layout="wide")
+# ---------------- CONFIG ---------------- #
+st.set_page_config(page_title="DLF HVAC Command Center", layout="wide")
+DATA_PATH = "data"
+os.makedirs(DATA_PATH, exist_ok=True)
 
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
+# ---------------- SAFE CSV LOADER ---------------- #
+def load_csv(filename, columns):
+    path = os.path.join(DATA_PATH, filename)
 
-# ---------------- SAFE CSV LOADER ----------------
-def load_csv(file, columns):
-    path = f"{DATA_DIR}/{file}"
-    if not os.path.exists(path) or os.stat(path).st_size == 0:
-        pd.DataFrame(columns=columns).to_csv(path, index=False)
-    return pd.read_csv(path)
+    if not os.path.exists(path):
+        df = pd.DataFrame(columns=columns)
+        df.to_csv(path, index=False)
+        return df
 
-# ---------------- LOAD DATA ----------------
-users = load_csv("users.csv", ["Employee_ID", "Name", "Role", "Password"])
-assets = load_csv("assets.csv", ["Asset_ID","Asset_Name","Asset_Type","Location","Health","AMC_End_Date"])
-logs = load_csv("daily_logs.csv", ["Date","Employee_ID","Asset_ID","Work_Type","Observation","Status"])
-attendance = load_csv("attendance.csv", ["Date","Employee_ID"])
-energy = load_csv("energy_meter.csv", ["Date","Asset_ID","kWh","BTU"])
-amc = load_csv("amc_master.csv", ["Asset_ID","Vendor","AMC_Value","Start_Date","End_Date"])
+    try:
+        df = pd.read_csv(path)
+    except:
+        df = pd.DataFrame(columns=columns)
 
-# ---------------- LOGIN ----------------
-st.sidebar.title("Login")
-emp_id = st.sidebar.text_input("Employee ID").strip()
-password = st.sidebar.text_input("Password", type="password").strip()
+    df.columns = df.columns.str.strip()
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+    for col in columns:
+        if col not in df.columns:
+            df[col] = ""
+
+    return df
+
+# ---------------- LOAD DATA ---------------- #
+users = load_csv("users.csv", ["Employee_ID", "Name", "Password", "Role"])
+assets = load_csv("assets.csv", [
+    "Asset_ID","Asset_Name","Asset_Type","Location",
+    "Health","AMC_Vendor","AMC_End_Date"
+])
+energy = load_csv("energy.csv", [
+    "Date","Asset_ID","kWh","BTU","Cost_per_kWh"
+])
+
+# Convert numeric safely
+energy["kWh"] = pd.to_numeric(energy["kWh"], errors="coerce").fillna(0)
+energy["BTU"] = pd.to_numeric(energy["BTU"], errors="coerce").fillna(0)
+energy["Cost_per_kWh"] = pd.to_numeric(energy["Cost_per_kWh"], errors="coerce").fillna(0)
+
+# ---------------- DEFAULT LOGIN USER ---------------- #
+if users.empty:
+    users.loc[len(users)] = ["admin","Admin","admin123","Admin"]
+    users.to_csv(os.path.join(DATA_PATH,"users.csv"), index=False)
+
+# ---------------- LOGIN ---------------- #
+st.sidebar.title("🔐 Login")
+
+username = st.sidebar.text_input("User ID")
+password = st.sidebar.text_input("Password", type="password")
 
 if st.sidebar.button("Login"):
-    match = users[(users["Employee_ID"] == emp_id) & (users["Password"] == password)]
-    if not match.empty:
-        st.session_state.logged_in = True
-        st.session_state.user = match.iloc[0]
-
-        # Auto attendance
-        today = datetime.now().strftime("%Y-%m-%d")
-        if not ((attendance["Employee_ID"] == emp_id) & (attendance["Date"] == today)).any():
-            new_att = pd.DataFrame([{"Date": today, "Employee_ID": emp_id}])
-            attendance = pd.concat([attendance, new_att], ignore_index=True)
-            attendance.to_csv(f"{DATA_DIR}/attendance.csv", index=False)
+    user = users[(users["Employee_ID"] == username) & (users["Password"] == password)]
+    if not user.empty:
+        st.session_state["logged_in"] = True
+        st.session_state["user"] = user.iloc[0]["Name"]
+        st.session_state["role"] = user.iloc[0]["Role"]
     else:
         st.sidebar.error("Invalid credentials")
 
-if not st.session_state.logged_in:
+if "logged_in" not in st.session_state:
     st.stop()
 
-user = st.session_state.user
-st.sidebar.success(f"{user['Name']} ({user['Role']})")
+st.sidebar.success(f"Welcome {st.session_state['user']}")
 
-# ---------------- MENU ----------------
-menu = st.sidebar.radio("Menu", [
-    "Live Wall Dashboard",
-    "Energy & BTU",
+menu = st.sidebar.radio("Navigation", [
+    "Wall Dashboard",
+    "Assets",
+    "Energy",
     "AMC Management",
-    "Daily Work Log",
-    "Reports",
-    "Attendance"
+    "PDF Report"
 ])
 
-# ==========================================================
-# 1️⃣ LIVE WALL DASHBOARD
-# ==========================================================
-if menu == "Live Wall Dashboard":
-    st.title("Central HVAC Live Dashboard")
+# ======================================================
+# 1️⃣ WALL DASHBOARD
+# ======================================================
+if menu == "Wall Dashboard":
+    st.title("🏢 All HVAC On One Screen")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Assets", len(assets))
-    col2.metric("Breakdowns", len(logs[logs["Work_Type"] == "Breakdown"]))
-    col3.metric("Total Energy (kWh)", energy["kWh"].sum())
+    total_assets = len(assets)
+    attention = len(assets[assets["Health"]=="Attention"])
+    ok_assets = len(assets[assets["Health"]=="OK"])
 
-    st.subheader("Asset Health Overview")
-    st.dataframe(assets)
+    total_kwh = energy["kWh"].sum()
+    total_btu = energy["BTU"].sum()
+    total_cost = (energy["kWh"] * energy["Cost_per_kWh"]).sum()
 
-# ==========================================================
-# 2️⃣ ENERGY & BTU DASHBOARD
-# ==========================================================
-elif menu == "Energy & BTU":
-    st.title("Energy & BTU Monitoring")
+    col1,col2,col3,col4 = st.columns(4)
+    col1.metric("Total Assets", total_assets)
+    col2.metric("Attention Required", attention)
+    col3.metric("Energy (kWh)", f"{total_kwh:,.0f}")
+    col4.metric("Energy Cost ₹", f"{total_cost:,.0f}")
+
+    st.dataframe(assets, use_container_width=True)
+
+# ======================================================
+# 2️⃣ ASSETS
+# ======================================================
+elif menu == "Assets":
+    st.title("HVAC Asset Management")
+
+    with st.form("asset_form"):
+        asset_id = st.text_input("Asset ID")
+        asset_name = st.text_input("Asset Name")
+        asset_type = st.text_input("Asset Type")
+        location = st.text_input("Location")
+        health = st.selectbox("Health", ["OK","Attention"])
+        vendor = st.text_input("AMC Vendor")
+        amc_date = st.date_input("AMC End Date")
+        submit = st.form_submit_button("Save")
+
+    if submit:
+        new_asset = {
+            "Asset_ID": asset_id,
+            "Asset_Name": asset_name,
+            "Asset_Type": asset_type,
+            "Location": location,
+            "Health": health,
+            "AMC_Vendor": vendor,
+            "AMC_End_Date": amc_date
+        }
+        assets = pd.concat([assets, pd.DataFrame([new_asset])], ignore_index=True)
+        assets.to_csv(os.path.join(DATA_PATH,"assets.csv"), index=False)
+        st.success("Asset Added")
+
+    st.dataframe(assets, use_container_width=True)
+
+# ======================================================
+# 3️⃣ ENERGY
+# ======================================================
+elif menu == "Energy":
+    st.title("Energy + BTU Monitoring")
 
     with st.form("energy_form"):
-        asset_id = st.selectbox("Asset", assets["Asset_ID"])
-        kwh = st.number_input("kWh Reading", min_value=0.0)
-        btu = st.number_input("BTU Reading", min_value=0.0)
+        asset = st.selectbox("Asset", assets["Asset_ID"])
+        kwh = st.number_input("kWh", min_value=0.0)
+        btu = st.number_input("BTU", min_value=0.0)
+        cost = st.number_input("Cost per kWh ₹", min_value=0.0)
         submit = st.form_submit_button("Submit")
 
     if submit:
-        new_energy = pd.DataFrame([{
-            "Date": datetime.now().strftime("%Y-%m-%d"),
-            "Asset_ID": asset_id,
+        new_energy = {
+            "Date": datetime.now().date(),
+            "Asset_ID": asset,
             "kWh": kwh,
-            "BTU": btu
-        }])
-        energy = pd.concat([energy, new_energy], ignore_index=True)
-        energy.to_csv(f"{DATA_DIR}/energy_meter.csv", index=False)
-        st.success("Energy data recorded")
+            "BTU": btu,
+            "Cost_per_kWh": cost
+        }
+        energy = pd.concat([energy, pd.DataFrame([new_energy])], ignore_index=True)
+        energy.to_csv(os.path.join(DATA_PATH,"energy.csv"), index=False)
+        st.success("Energy Data Added")
 
-    st.subheader("Energy Summary")
-    total_kwh = energy["kWh"].sum()
-    cost = total_kwh * 10  # ₹10 per unit assumption
-    st.metric("Total Consumption (kWh)", total_kwh)
-    st.metric("Estimated Energy Cost (₹)", cost)
+    st.dataframe(energy, use_container_width=True)
 
-# ==========================================================
-# 3️⃣ AMC MANAGEMENT
-# ==========================================================
+# ======================================================
+# 4️⃣ AMC MANAGEMENT
+# ======================================================
 elif menu == "AMC Management":
-    st.title("AMC Vendor Management")
+    st.title("AMC Vendor Tracking")
 
-    with st.form("amc_form"):
-        asset_id = st.selectbox("Asset", assets["Asset_ID"])
-        vendor = st.text_input("Vendor Name")
-        value = st.number_input("AMC Value (₹)", min_value=0.0)
-        start = st.date_input("Start Date")
-        end = st.date_input("End Date")
-        submit = st.form_submit_button("Save AMC")
+    today = datetime.now().date()
+    assets["AMC_End_Date"] = pd.to_datetime(assets["AMC_End_Date"], errors="coerce")
 
-    if submit:
-        new_amc = pd.DataFrame([{
-            "Asset_ID": asset_id,
-            "Vendor": vendor,
-            "AMC_Value": value,
-            "Start_Date": start,
-            "End_Date": end
-        }])
-        amc = pd.concat([amc, new_amc], ignore_index=True)
-        amc.to_csv(f"{DATA_DIR}/amc_master.csv", index=False)
-        st.success("AMC saved")
+    expiring = assets[assets["AMC_End_Date"] <= pd.Timestamp(today)]
 
-    st.subheader("AMC Expiry Alerts")
-    if not amc.empty:
-        amc["End_Date"] = pd.to_datetime(amc["End_Date"], errors="coerce")
-        expiring = amc[(amc["End_Date"] - pd.Timestamp.today()).dt.days <= 30]
+    if not expiring.empty:
+        st.error("⚠ AMC Expired / Due")
         st.dataframe(expiring)
+    else:
+        st.success("All AMC Valid")
 
-# ==========================================================
-# 4️⃣ DAILY WORK LOG
-# ==========================================================
-elif menu == "Daily Work Log":
-    st.title("Daily HVAC Work Log")
+# ======================================================
+# 5️⃣ PDF REPORT
+# ======================================================
+elif menu == "PDF Report":
+    st.title("Download Monthly PDF Report")
 
-    with st.form("log_form"):
-        asset_id = st.selectbox("Asset", assets["Asset_ID"])
-        work_type = st.selectbox("Work Type", ["Routine","Preventive","Breakdown"])
-        obs = st.text_area("Observation")
-        status = st.selectbox("Health", ["OK","Attention"])
-        submit = st.form_submit_button("Submit")
+    if st.button("Generate PDF"):
+        filename = "HVAC_Report.pdf"
+        doc = SimpleDocTemplate(filename)
+        elements = []
 
-    if submit:
-        new_log = pd.DataFrame([{
-            "Date": datetime.now().strftime("%Y-%m-%d"),
-            "Employee_ID": user["Employee_ID"],
-            "Asset_ID": asset_id,
-            "Work_Type": work_type,
-            "Observation": obs,
-            "Status": status
-        }])
-        logs = pd.concat([logs, new_log], ignore_index=True)
-        logs.to_csv(f"{DATA_DIR}/daily_logs.csv", index=False)
-        st.success("Log Saved")
+        styles = getSampleStyleSheet()
+        elements.append(Paragraph("DLF HVAC Monthly Report", styles["Heading1"]))
+        elements.append(Spacer(1,0.3*inch))
 
-# ==========================================================
-# 5️⃣ REPORTS + PDF DOWNLOAD
-# ==========================================================
-elif menu == "Reports":
-    st.title("Monthly Report")
+        elements.append(Paragraph(f"Total Assets: {len(assets)}", styles["Normal"]))
+        elements.append(Paragraph(f"Total Energy: {energy['kWh'].sum()} kWh", styles["Normal"]))
+        elements.append(Paragraph(f"Total Cost: ₹ {(energy['kWh']*energy['Cost_per_kWh']).sum()}", styles["Normal"]))
 
-    if not logs.empty:
-        logs["Date"] = pd.to_datetime(logs["Date"], errors="coerce")
-        month = st.selectbox("Select Month", logs["Date"].dt.month.unique())
-        monthly = logs[logs["Date"].dt.month == month]
+        doc.build(elements)
 
-        summary = monthly.groupby(["Asset_ID","Work_Type"]).size().reset_index(name="Count")
-        st.dataframe(summary)
+        with open(filename,"rb") as f:
+            st.download_button("Download Report", f, file_name=filename)
 
-        if st.button("Generate PDF Report"):
-            file_path = "hvac_monthly_report.pdf"
-            doc = SimpleDocTemplate(file_path)
-            elements = []
-            styles = getSampleStyleSheet()
-            elements.append(Paragraph("DLF Cyber Park HVAC Monthly Report", styles["Heading1"]))
-            elements.append(Spacer(1, 0.5 * inch))
-            elements.append(Paragraph(str(summary.to_string()), styles["Normal"]))
-            doc.build(elements)
-
-            with open(file_path, "rb") as f:
-                st.download_button("Download PDF", f, file_name="HVAC_Report.pdf")
-
-# ==========================================================
-# 6️⃣ ATTENDANCE
-# ==========================================================
-elif menu == "Attendance":
-    st.title("Attendance Record")
-    st.dataframe(attendance)
+        st.success("PDF Generated")
