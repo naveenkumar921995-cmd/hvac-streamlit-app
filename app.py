@@ -1,179 +1,289 @@
 import streamlit as st
-import pandas as pd
 import sqlite3
+import pandas as pd
+import hashlib
 import os
 from datetime import datetime
-import hashlib
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
 
-# ---------------- CONFIG ---------------- #
-st.set_page_config(layout="wide", page_title="DLF Cyber Park – Enterprise Control Room")
+# =========================
+# PAGE CONFIG
+# =========================
+st.set_page_config(page_title="DLF Cyber Park – Enterprise Control Room",
+                   layout="wide")
 
-DB = "enterprise.db"
-EXCEL_FILE = "DLF_Enterprise_Asset_Master_Template.xlsx"
-
-# ---------------- DLF CORPORATE THEME ---------------- #
+# =========================
+# DARK CORPORATE UI
+# =========================
 st.markdown("""
 <style>
-.stApp {background: linear-gradient(135deg,#071a2d,#0b2a45);}
-h1,h2,h3,h4 {color:white;}
-div[data-testid="metric-container"] {
-   background-color: #0f3a5d;
-   border-radius: 10px;
-   padding: 15px;
-   color: white;
-}
+body { background-color:#0e1117; color:white; }
+.stMetric { background-color:#1c1f26; padding:15px; border-radius:10px; }
+h1,h2,h3 { color:#00BFFF; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- DATABASE INIT ---------------- #
-def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+# =========================
+# DATABASE CONNECTION
+# =========================
+conn = sqlite3.connect("enterprise.db", check_same_thread=False)
+cursor = conn.cursor()
 
-    c.execute("""CREATE TABLE IF NOT EXISTS assets(
-        Asset_ID TEXT PRIMARY KEY,
-        Asset_Name TEXT,
-        Department TEXT,
-        Location TEXT,
-        Capacity TEXT,
-        Make TEXT,
-        Model TEXT,
-        Installation_Date TEXT,
-        Status TEXT,
-        Criticality TEXT
-    )""")
+# =========================
+# PASSWORD HASHING
+# =========================
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-    c.execute("""CREATE TABLE IF NOT EXISTS energy(
-        Date TEXT,
-        Asset_ID TEXT,
-        kWh REAL,
-        BTU REAL,
-        Diesel_Liters REAL,
-        Cost_per_Unit REAL
-    )""")
+# =========================
+# CREATE TABLES
+# =========================
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+username TEXT UNIQUE,
+password TEXT,
+role TEXT
+)
+""")
 
-    c.execute("""CREATE TABLE IF NOT EXISTS amc(
-        Asset_ID TEXT,
-        Vendor_Name TEXT,
-        Contract_Type TEXT,
-        Start_Date TEXT,
-        Expiry_Date TEXT,
-        Contract_Value REAL,
-        Contact_Person TEXT
-    )""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS assets (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT,
+location TEXT,
+department TEXT,
+health TEXT,
+amc_end TEXT
+)
+""")
 
-    c.execute("""CREATE TABLE IF NOT EXISTS maintenance(
-        Date TEXT,
-        Asset_ID TEXT,
-        Work_Type TEXT,
-        Description TEXT,
-        Downtime_Hours REAL,
-        Action_Taken TEXT,
-        Done_By TEXT,
-        OEM_Involved TEXT
-    )""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS energy (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+asset_name TEXT,
+kwh REAL,
+cost REAL,
+date TEXT
+)
+""")
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS attendance (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+username TEXT,
+login_time TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS finance (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+department TEXT,
+budget REAL,
+expense REAL,
+month TEXT
+)
+""")
+
+conn.commit()
+
+# =========================
+# DEFAULT USERS
+# =========================
+def create_default_users():
+    users = [
+        ("admin", hash_password("Admin@123"), "Admin"),
+        ("manager", hash_password("Manager@123"), "Manager"),
+        ("engineer", hash_password("Engineer@123"), "Engineer")
+    ]
+    for u in users:
+        try:
+            cursor.execute("INSERT INTO users (username,password,role) VALUES (?,?,?)", u)
+        except:
+            pass
     conn.commit()
-    conn.close()
 
-init_db()
+create_default_users()
 
-# ---------------- FIRST RUN EXCEL LOAD ---------------- #
-def load_excel():
-    conn = sqlite3.connect(DB)
-    existing = pd.read_sql("SELECT * FROM assets", conn)
-
-    if existing.empty and os.path.exists(EXCEL_FILE):
-        xl = pd.ExcelFile(EXCEL_FILE)
-
-        # Load Asset Master
-        assets_df = xl.parse("ASSET_MASTER")
-        assets_df.to_sql("assets", conn, if_exists="append", index=False)
-
-        # Load Energy
-        energy_df = xl.parse("ENERGY_LOG")
-        energy_df.to_sql("energy", conn, if_exists="append", index=False)
-
-        # Load AMC
-        amc_df = xl.parse("AMC_TRACKING")
-        amc_df.to_sql("amc", conn, if_exists="append", index=False)
-
-        # Load Maintenance
-        maint_df = xl.parse("MAINTENANCE_LOG")
-        maint_df.to_sql("maintenance", conn, if_exists="append", index=False)
-
-    conn.close()
-
-load_excel()
-
-# ---------------- LOGIN ---------------- #
-def hash_pass(p):
-    return hashlib.sha256(p.encode()).hexdigest()
-
-USERS = {"admin": hash_pass("Admin@123")}
-
+# =========================
+# LOGIN
+# =========================
 if "login" not in st.session_state:
     st.session_state.login = False
 
 if not st.session_state.login:
-    st.title("DLF Cyber Park – Enterprise Control Room")
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+    st.title("DLF Cyber Park – Enterprise Login")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if u in USERS and USERS[u] == hash_pass(p):
+        cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
+                       (username, hash_password(password)))
+        user = cursor.fetchone()
+
+        if user:
             st.session_state.login = True
-            st.success("Login Successful")
+            st.session_state.username = username
+            st.session_state.role = user[3]
+            cursor.execute("INSERT INTO attendance (username,login_time) VALUES (?,?)",
+                           (username, str(datetime.now())))
+            conn.commit()
+            st.rerun()
         else:
             st.error("Invalid Credentials")
+
     st.stop()
 
-# ---------------- LOAD DB DATA ---------------- #
-conn = sqlite3.connect(DB)
-assets = pd.read_sql("SELECT * FROM assets", conn)
-energy = pd.read_sql("SELECT * FROM energy", conn)
-amc = pd.read_sql("SELECT * FROM amc", conn)
-maintenance = pd.read_sql("SELECT * FROM maintenance", conn)
+# =========================
+# SIDEBAR
+# =========================
+st.sidebar.success(f"{st.session_state.username} ({st.session_state.role})")
 
-# ---------------- EXECUTIVE DASHBOARD ---------------- #
-st.title("🏢 Executive Control Dashboard")
+menu = st.sidebar.radio("Navigation", [
+    "Executive Dashboard",
+    "Assets",
+    "Energy + BTU",
+    "Finance",
+    "Reports",
+    "Control Room"
+])
 
-col1, col2, col3, col4 = st.columns(4)
+# =========================
+# KPI ENGINE
+# =========================
+def calculate_kpi():
+    total = pd.read_sql("SELECT COUNT(*) as c FROM assets", conn)["c"][0]
+    critical = pd.read_sql(
+        "SELECT COUNT(*) as c FROM assets WHERE health='Critical'", conn)["c"][0]
+    expired = pd.read_sql(
+        "SELECT COUNT(*) as c FROM assets WHERE amc_end < date('now')", conn)["c"][0]
 
-total_assets = len(assets)
-total_energy = energy["kWh"].sum() if not energy.empty else 0
-total_btu = energy["BTU"].sum() if not energy.empty else 0
-active_amc = len(amc)
+    score = 100 - (critical*5) - (expired*3)
+    return max(score,0)
 
-col1.metric("Total Assets", total_assets)
-col2.metric("Total Energy (kWh)", round(total_energy,2))
-col3.metric("Total BTU", round(total_btu,2))
-col4.metric("Active AMC Contracts", active_amc)
+# =========================
+# EXECUTIVE DASHBOARD
+# =========================
+if menu == "Executive Dashboard":
+    st.title("Enterprise Executive Dashboard")
 
-# ---------------- DEPARTMENT FILTER ---------------- #
-dept_filter = st.selectbox("Select Department", assets["Department"].unique())
-filtered_assets = assets[assets["Department"] == dept_filter]
+    col1,col2,col3,col4 = st.columns(4)
 
-st.subheader(f"{dept_filter} Assets")
-st.dataframe(filtered_assets)
+    total_assets = pd.read_sql("SELECT COUNT(*) as c FROM assets", conn)["c"][0]
+    col1.metric("Total Assets", total_assets)
 
-# ---------------- ENERGY SECTION ---------------- #
-st.subheader("Energy Trend")
-if not energy.empty:
-    energy_group = energy.groupby("Date")["kWh"].sum()
-    st.line_chart(energy_group)
+    kpi = calculate_kpi()
+    col2.metric("Site KPI Score", f"{kpi}/100")
 
-# ---------------- AMC ALERT ---------------- #
-st.subheader("AMC Expiry Alerts (Next 30 Days)")
-if not amc.empty:
-    amc["Expiry_Date"] = pd.to_datetime(amc["Expiry_Date"])
-    alert = amc[amc["Expiry_Date"] < pd.Timestamp.today() + pd.Timedelta(days=30)]
-    st.dataframe(alert)
+    energy_sum = pd.read_sql("SELECT SUM(kwh) as s FROM energy", conn)["s"][0]
+    col3.metric("Total kWh", 0 if energy_sum is None else round(energy_sum,2))
 
-# ---------------- MAINTENANCE SUMMARY ---------------- #
-st.subheader("Maintenance Summary")
-if not maintenance.empty:
-    summary = maintenance.groupby("Work_Type").size()
-    st.bar_chart(summary)
+    finance = pd.read_sql("SELECT SUM(budget-expense) as v FROM finance", conn)["v"][0]
+    col4.metric("Budget Variance", 0 if finance is None else round(finance,2))
 
-conn.close()
+# =========================
+# ASSET MANAGEMENT
+# =========================
+elif menu == "Assets":
+    st.title("Asset Management")
+
+    with st.form("asset_form"):
+        name = st.text_input("Asset Name")
+        location = st.text_input("Location")
+        department = st.selectbox("Department",
+            ["HVAC","DG","Electrical","STP","WTP","Lifts","CCTV","Fire","Facade","BMS"])
+        health = st.selectbox("Health",["OK","Attention","Critical"])
+        amc_end = st.date_input("AMC End Date")
+
+        if st.form_submit_button("Add Asset"):
+            cursor.execute(
+                "INSERT INTO assets (name,location,department,health,amc_end) VALUES (?,?,?,?,?)",
+                (name,location,department,health,str(amc_end)))
+            conn.commit()
+            st.success("Asset Added")
+
+    st.dataframe(pd.read_sql("SELECT * FROM assets", conn))
+
+# =========================
+# ENERGY + BTU
+# =========================
+elif menu == "Energy + BTU":
+    st.title("Energy & BTU Tracking")
+
+    with st.form("energy_form"):
+        asset = st.text_input("Asset Name")
+        kwh = st.number_input("kWh",0.0)
+        cost = st.number_input("Cost",0.0)
+
+        if st.form_submit_button("Add Energy"):
+            cursor.execute(
+                "INSERT INTO energy (asset_name,kwh,cost,date) VALUES (?,?,?,?)",
+                (asset,kwh,cost,str(datetime.now())))
+            conn.commit()
+            st.success("Energy Logged")
+
+    df = pd.read_sql("SELECT * FROM energy", conn)
+    if not df.empty:
+        df["BTU"] = df["kwh"] * 3412
+        st.dataframe(df)
+
+# =========================
+# FINANCE
+# =========================
+elif menu == "Finance":
+    st.title("Budget vs P&L")
+
+    with st.form("finance_form"):
+        dept = st.text_input("Department")
+        budget = st.number_input("Budget",0.0)
+        expense = st.number_input("Expense",0.0)
+        month = st.text_input("Month")
+
+        if st.form_submit_button("Add Finance Data"):
+            cursor.execute(
+                "INSERT INTO finance (department,budget,expense,month) VALUES (?,?,?,?)",
+                (dept,budget,expense,month))
+            conn.commit()
+            st.success("Finance Data Added")
+
+    st.dataframe(pd.read_sql("SELECT *, (budget-expense) as Variance FROM finance", conn))
+
+# =========================
+# REPORTS
+# =========================
+elif menu == "Reports":
+    st.title("Management Report")
+
+    if st.button("Generate PDF Report"):
+        doc = SimpleDocTemplate("DLF_Report.pdf")
+        styles = getSampleStyleSheet()
+        elements = []
+
+        elements.append(Paragraph("DLF Cyber Park Executive Report",
+                                  styles["Heading1"]))
+        elements.append(Spacer(1,0.5*inch))
+        elements.append(Paragraph(f"KPI Score: {calculate_kpi()}",
+                                  styles["Normal"]))
+
+        doc.build(elements)
+        st.success("Report Generated")
+
+# =========================
+# CONTROL ROOM
+# =========================
+elif menu == "Control Room":
+    st.title("DLF CYBER PARK – LIVE CONTROL ROOM")
+    df = pd.read_sql("SELECT name,department,health FROM assets", conn)
+    st.dataframe(df)
+
+# =========================
+# POWER BI EXPORT
+# =========================
+st.sidebar.markdown("---")
+if st.sidebar.button("Export Data for Power BI"):
+    pd.read_sql("SELECT * FROM assets", conn).to_csv("powerbi_export.csv",index=False)
+    st.sidebar.success("Exported")
