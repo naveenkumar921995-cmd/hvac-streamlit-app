@@ -4,45 +4,52 @@ import pandas as pd
 import hashlib
 import os
 from datetime import datetime
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
+import numpy as np
 
-# =========================
+# ===============================
 # PAGE CONFIG
-# =========================
-st.set_page_config(page_title="DLF Cyber Park – Enterprise Control Room",
-                   layout="wide")
+# ===============================
+st.set_page_config(
+    page_title="DLF Cyber Park – Enterprise Control Room V5",
+    layout="wide"
+)
 
-# =========================
-# DARK CORPORATE UI
-# =========================
+# ===============================
+# ULTRA DARK DLF THEME
+# ===============================
 st.markdown("""
 <style>
-body { background-color:#0e1117; color:white; }
-.stMetric { background-color:#1c1f26; padding:15px; border-radius:10px; }
-h1,h2,h3 { color:#00BFFF; }
+body { background-color: #0b0f1a; color: white; }
+h1, h2, h3 { color: #00c6ff; }
+.stMetric {
+    background: linear-gradient(145deg,#141c2f,#1c2333);
+    padding: 15px;
+    border-radius: 12px;
+}
+.sidebar .sidebar-content {
+    background-color: #111827;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# DATABASE CONNECTION
-# =========================
-conn = sqlite3.connect("enterprise.db", check_same_thread=False)
+# ===============================
+# DATABASE
+# ===============================
+conn = sqlite3.connect("enterprise_v5.db", check_same_thread=False)
 cursor = conn.cursor()
 
-# =========================
-# PASSWORD HASHING
-# =========================
+# ===============================
+# HASH PASSWORD
+# ===============================
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# =========================
+# ===============================
 # CREATE TABLES
-# =========================
+# ===============================
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
+id INTEGER PRIMARY KEY,
 username TEXT UNIQUE,
 password TEXT,
 role TEXT
@@ -51,19 +58,20 @@ role TEXT
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS assets (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
+id INTEGER PRIMARY KEY,
 name TEXT,
-location TEXT,
 department TEXT,
+location TEXT,
 health TEXT,
-amc_end TEXT
+amc_end TEXT,
+breakdowns INTEGER DEFAULT 0
 )
 """)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS energy (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-asset_name TEXT,
+id INTEGER PRIMARY KEY,
+asset TEXT,
 kwh REAL,
 cost REAL,
 date TEXT
@@ -71,16 +79,8 @@ date TEXT
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS attendance (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-username TEXT,
-login_time TEXT
-)
-""")
-
-cursor.execute("""
 CREATE TABLE IF NOT EXISTS finance (
-id INTEGER PRIMARY KEY AUTOINCREMENT,
+id INTEGER PRIMARY KEY,
 department TEXT,
 budget REAL,
 expense REAL,
@@ -88,12 +88,21 @@ month TEXT
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS vendor (
+id INTEGER PRIMARY KEY,
+vendor_name TEXT,
+response_days INTEGER,
+repeat_issues INTEGER
+)
+""")
+
 conn.commit()
 
-# =========================
+# ===============================
 # DEFAULT USERS
-# =========================
-def create_default_users():
+# ===============================
+def create_users():
     users = [
         ("admin", hash_password("Admin@123"), "Admin"),
         ("manager", hash_password("Manager@123"), "Manager"),
@@ -106,136 +115,162 @@ def create_default_users():
             pass
     conn.commit()
 
-create_default_users()
+create_users()
 
-# =========================
+# ===============================
 # LOGIN
-# =========================
+# ===============================
 if "login" not in st.session_state:
     st.session_state.login = False
 
 if not st.session_state.login:
-    st.title("DLF Cyber Park – Enterprise Login")
+    st.title("DLF Enterprise Control Room – Secure Login")
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    user = st.text_input("Username")
+    pwd = st.text_input("Password", type="password")
 
     if st.button("Login"):
         cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
-                       (username, hash_password(password)))
-        user = cursor.fetchone()
-
-        if user:
+                       (user, hash_password(pwd)))
+        if cursor.fetchone():
             st.session_state.login = True
-            st.session_state.username = username
-            st.session_state.role = user[3]
-            cursor.execute("INSERT INTO attendance (username,login_time) VALUES (?,?)",
-                           (username, str(datetime.now())))
-            conn.commit()
+            st.session_state.username = user
             st.rerun()
         else:
             st.error("Invalid Credentials")
-
     st.stop()
 
-# =========================
+# ===============================
 # SIDEBAR
-# =========================
-st.sidebar.success(f"{st.session_state.username} ({st.session_state.role})")
+# ===============================
+st.sidebar.success(f"Logged in as: {st.session_state.username}")
 
 menu = st.sidebar.radio("Navigation", [
     "Executive Dashboard",
     "Assets",
-    "Energy + BTU",
-    "Finance",
-    "Reports",
+    "Energy Intelligence",
+    "Finance Intelligence",
+    "Vendor Intelligence",
     "Control Room"
 ])
 
-# =========================
-# KPI ENGINE
-# =========================
-def calculate_kpi():
-    total = pd.read_sql("SELECT COUNT(*) as c FROM assets", conn)["c"][0]
-    critical = pd.read_sql(
-        "SELECT COUNT(*) as c FROM assets WHERE health='Critical'", conn)["c"][0]
-    expired = pd.read_sql(
-        "SELECT COUNT(*) as c FROM assets WHERE amc_end < date('now')", conn)["c"][0]
+# ===============================
+# AI ENGINE FUNCTIONS
+# ===============================
 
-    score = 100 - (critical*5) - (expired*3)
-    return max(score,0)
+def predictive_risk(asset_row):
+    risk = 0
+    if asset_row["health"] == "Critical":
+        risk += 40
+    if asset_row["breakdowns"] > 3:
+        risk += 30
+    if pd.to_datetime(asset_row["amc_end"]) < pd.Timestamp.now():
+        risk += 20
+    return min(risk,100)
 
-# =========================
+def energy_anomaly(df):
+    if df.empty:
+        return 0
+    avg = df["kwh"].mean()
+    latest = df["kwh"].iloc[-1]
+    if latest > avg * 1.3:
+        return "Critical"
+    elif latest > avg * 1.1:
+        return "Warning"
+    else:
+        return "Normal"
+
+def site_kpi():
+    assets = pd.read_sql("SELECT * FROM assets", conn)
+    if assets.empty:
+        return 100
+    risk_scores = assets.apply(predictive_risk, axis=1)
+    avg_risk = risk_scores.mean()
+    return max(100 - avg_risk,0)
+
+# ===============================
 # EXECUTIVE DASHBOARD
-# =========================
+# ===============================
 if menu == "Executive Dashboard":
-    st.title("Enterprise Executive Dashboard")
 
-    col1,col2,col3,col4 = st.columns(4)
+    st.title("Enterprise AI Executive Dashboard")
+
+    col1,col2,col3 = st.columns(3)
 
     total_assets = pd.read_sql("SELECT COUNT(*) as c FROM assets", conn)["c"][0]
     col1.metric("Total Assets", total_assets)
 
-    kpi = calculate_kpi()
-    col2.metric("Site KPI Score", f"{kpi}/100")
+    col2.metric("Site KPI Score", round(site_kpi(),1))
 
-    energy_sum = pd.read_sql("SELECT SUM(kwh) as s FROM energy", conn)["s"][0]
-    col3.metric("Total kWh", 0 if energy_sum is None else round(energy_sum,2))
+    energy_df = pd.read_sql("SELECT * FROM energy", conn)
+    anomaly = energy_anomaly(energy_df)
+    col3.metric("Energy Status", anomaly)
 
-    finance = pd.read_sql("SELECT SUM(budget-expense) as v FROM finance", conn)["v"][0]
-    col4.metric("Budget Variance", 0 if finance is None else round(finance,2))
-
-# =========================
-# ASSET MANAGEMENT
-# =========================
+# ===============================
+# ASSETS
+# ===============================
 elif menu == "Assets":
+
     st.title("Asset Management")
 
     with st.form("asset_form"):
         name = st.text_input("Asset Name")
-        location = st.text_input("Location")
-        department = st.selectbox("Department",
-            ["HVAC","DG","Electrical","STP","WTP","Lifts","CCTV","Fire","Facade","BMS"])
+        dept = st.selectbox("Department",
+            ["HVAC","DG","Electrical","STP","WTP","Lifts",
+             "CCTV","Fire","Facade","BMS"])
+        loc = st.text_input("Location")
         health = st.selectbox("Health",["OK","Attention","Critical"])
-        amc_end = st.date_input("AMC End Date")
+        amc = st.date_input("AMC End Date")
+        breakdown = st.number_input("Breakdown Count",0)
 
         if st.form_submit_button("Add Asset"):
-            cursor.execute(
-                "INSERT INTO assets (name,location,department,health,amc_end) VALUES (?,?,?,?,?)",
-                (name,location,department,health,str(amc_end)))
+            cursor.execute("""
+            INSERT INTO assets (name,department,location,health,amc_end,breakdowns)
+            VALUES (?,?,?,?,?,?)
+            """,(name,dept,loc,health,str(amc),breakdown))
             conn.commit()
             st.success("Asset Added")
 
-    st.dataframe(pd.read_sql("SELECT * FROM assets", conn))
+    df = pd.read_sql("SELECT * FROM assets", conn)
 
-# =========================
-# ENERGY + BTU
-# =========================
-elif menu == "Energy + BTU":
-    st.title("Energy & BTU Tracking")
+    if not df.empty:
+        df["Risk Score"] = df.apply(predictive_risk, axis=1)
+        st.dataframe(df)
+
+# ===============================
+# ENERGY INTELLIGENCE
+# ===============================
+elif menu == "Energy Intelligence":
+
+    st.title("Energy + BTU AI Engine")
 
     with st.form("energy_form"):
-        asset = st.text_input("Asset Name")
+        asset = st.text_input("Asset")
         kwh = st.number_input("kWh",0.0)
         cost = st.number_input("Cost",0.0)
 
         if st.form_submit_button("Add Energy"):
-            cursor.execute(
-                "INSERT INTO energy (asset_name,kwh,cost,date) VALUES (?,?,?,?)",
-                (asset,kwh,cost,str(datetime.now())))
+            cursor.execute("""
+            INSERT INTO energy (asset,kwh,cost,date)
+            VALUES (?,?,?,?)
+            """,(asset,kwh,cost,str(datetime.now())))
             conn.commit()
             st.success("Energy Logged")
 
     df = pd.read_sql("SELECT * FROM energy", conn)
+
     if not df.empty:
         df["BTU"] = df["kwh"] * 3412
         st.dataframe(df)
 
-# =========================
-# FINANCE
-# =========================
-elif menu == "Finance":
-    st.title("Budget vs P&L")
+        st.metric("Energy Anomaly Status", energy_anomaly(df))
+
+# ===============================
+# FINANCE INTELLIGENCE
+# ===============================
+elif menu == "Finance Intelligence":
+
+    st.title("Budget vs P&L Intelligence")
 
     with st.form("finance_form"):
         dept = st.text_input("Department")
@@ -243,47 +278,52 @@ elif menu == "Finance":
         expense = st.number_input("Expense",0.0)
         month = st.text_input("Month")
 
-        if st.form_submit_button("Add Finance Data"):
-            cursor.execute(
-                "INSERT INTO finance (department,budget,expense,month) VALUES (?,?,?,?)",
-                (dept,budget,expense,month))
+        if st.form_submit_button("Add Finance"):
+            cursor.execute("""
+            INSERT INTO finance (department,budget,expense,month)
+            VALUES (?,?,?,?)
+            """,(dept,budget,expense,month))
             conn.commit()
-            st.success("Finance Data Added")
+            st.success("Finance Added")
 
-    st.dataframe(pd.read_sql("SELECT *, (budget-expense) as Variance FROM finance", conn))
+    df = pd.read_sql("SELECT * FROM finance", conn)
+    if not df.empty:
+        df["Variance"] = df["budget"] - df["expense"]
+        st.dataframe(df)
 
-# =========================
-# REPORTS
-# =========================
-elif menu == "Reports":
-    st.title("Management Report")
+# ===============================
+# VENDOR INTELLIGENCE
+# ===============================
+elif menu == "Vendor Intelligence":
 
-    if st.button("Generate PDF Report"):
-        doc = SimpleDocTemplate("DLF_Report.pdf")
-        styles = getSampleStyleSheet()
-        elements = []
+    st.title("Vendor Performance Scoring")
 
-        elements.append(Paragraph("DLF Cyber Park Executive Report",
-                                  styles["Heading1"]))
-        elements.append(Spacer(1,0.5*inch))
-        elements.append(Paragraph(f"KPI Score: {calculate_kpi()}",
-                                  styles["Normal"]))
+    with st.form("vendor_form"):
+        name = st.text_input("Vendor Name")
+        response = st.number_input("Avg Response Days",0)
+        repeat = st.number_input("Repeat Issues",0)
 
-        doc.build(elements)
-        st.success("Report Generated")
+        if st.form_submit_button("Add Vendor"):
+            cursor.execute("""
+            INSERT INTO vendor (vendor_name,response_days,repeat_issues)
+            VALUES (?,?,?)
+            """,(name,response,repeat))
+            conn.commit()
+            st.success("Vendor Added")
 
-# =========================
+    df = pd.read_sql("SELECT * FROM vendor", conn)
+
+    if not df.empty:
+        df["Performance Score"] = 100 - (df["response_days"]*5 + df["repeat_issues"]*10)
+        st.dataframe(df)
+
+# ===============================
 # CONTROL ROOM
-# =========================
+# ===============================
 elif menu == "Control Room":
-    st.title("DLF CYBER PARK – LIVE CONTROL ROOM")
+
+    st.title("DLF LIVE CONTROL ROOM VIEW")
+
     df = pd.read_sql("SELECT name,department,health FROM assets", conn)
     st.dataframe(df)
 
-# =========================
-# POWER BI EXPORT
-# =========================
-st.sidebar.markdown("---")
-if st.sidebar.button("Export Data for Power BI"):
-    pd.read_sql("SELECT * FROM assets", conn).to_csv("powerbi_export.csv",index=False)
-    st.sidebar.success("Exported")
