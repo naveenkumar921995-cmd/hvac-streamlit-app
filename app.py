@@ -2,26 +2,44 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import time
-from io import BytesIO
-from datetime import datetime
 from fpdf import FPDF
+from io import BytesIO
+from datetime import datetime, timedelta
+import time
 
-# ------------------------
-# Dummy Data Simulation
-# ------------------------
-departments = ['Facilities', 'Security', 'IT', 'Energy', 'Admin']
-roles = ['Admin', 'Executive', 'Engineer']
+# =============================
+# V6 Enterprise DLF Cyberpark Dashboard
+# =============================
 
-# Simulate Users
+# -----------------------------
+# Configuration & Theme
+# -----------------------------
+st.set_page_config(page_title='DLF Cyberpark Management Dashboard', layout='wide', page_icon='🏢')
+
+st.markdown("""
+<style>
+body { background-color: #0a0f17; color: #FFFFFF; }
+.sidebar .sidebar-content { background-color: #0a0f17; }
+h1, h2, h3, h4, h5, h6 { color: #00FFFF; }
+div.stButton > button:first-child { background-color: #00FFFF; color:#000000; }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# User & Role Setup
+# -----------------------------
 users = {
     'admin': {'password': 'admin123', 'role': 'Admin'},
     'exec': {'password': 'exec123', 'role': 'Executive'},
     'eng': {'password': 'eng123', 'role': 'Engineer'}
 }
+roles = ['Admin', 'Executive', 'Engineer']
+departments = ['Facilities', 'Security', 'IT', 'Energy', 'Admin']
 
-# Simulate Department Data
-def generate_department_data(dept):
+# -----------------------------
+# Dummy Data Simulation
+# -----------------------------
+def simulate_department_data(dept):
     np.random.seed(int(time.time()) % 1000)
     assets = pd.DataFrame({
         'Asset': [f'{dept}_Asset_{i}' for i in range(1, 11)],
@@ -47,10 +65,10 @@ def generate_department_data(dept):
     })
     return assets, energy, budget, vendor_scores, alerts
 
-# ------------------------
+# -----------------------------
 # PDF Export Function
-# ------------------------
-def generate_pdf(dept, assets, energy, budget, vendor_scores, alerts):
+# -----------------------------
+def export_pdf(dept, assets, energy, budget, vendor_scores, alerts):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font('Arial', 'B', 16)
@@ -77,29 +95,14 @@ def generate_pdf(dept, assets, energy, budget, vendor_scores, alerts):
     for i, row in alerts.iterrows():
         pdf.cell(0, 8, f'{row.Alert} - Severity: {row.Severity}', ln=True)
 
-    pdf_output = BytesIO()
-    pdf.output(pdf_output)
-    pdf_output.seek(0)
-    return pdf_output
+    output = BytesIO()
+    pdf.output(output)
+    output.seek(0)
+    return output
 
-# ------------------------
-# Streamlit App
-# ------------------------
-
-st.set_page_config(page_title='DLF Cyberpark Management Dashboard', layout='wide')
-
-# Ultra-dark theme
-st.markdown("""
-<style>
-body { background-color: #0e1117; color: #FFFFFF; }
-.sidebar .sidebar-content { background-color: #111317; }
-h1, h2, h3, h4, h5, h6 { color: #00FFFF; }
-</style>
-""", unsafe_allow_html=True)
-
-# ------------------------
+# -----------------------------
 # Login Page
-# ------------------------
+# -----------------------------
 st.title('DLF Cyberpark Management Dashboard Login')
 username = st.text_input('Username')
 password = st.text_input('Password', type='password')
@@ -113,25 +116,24 @@ if st.button('Login'):
     else:
         st.error('Invalid username or password')
 
-# ------------------------
-# Main App
-# ------------------------
+# -----------------------------
+# Main Dashboard
+# -----------------------------
 if 'logged_in' in st.session_state and st.session_state['logged_in']:
     role = st.session_state['role']
-    st.session_state['role'] = role
 
-    # Header with logos
+    # Header with Logos
     col1, col2, col3 = st.columns([1,6,1])
     with col1:
-        st.image('https://via.placeholder.com/100x50?text=DLF', width=100)
+        st.image('https://via.placeholder.com/120x60?text=DLF', width=120)
     with col2:
         st.markdown('<h1 style="text-align:center; color:#00FFFF;">DLF Cyberpark Management Dashboard</h1>', unsafe_allow_html=True)
     with col3:
-        st.image('https://via.placeholder.com/100x50?text=LNP', width=100)
+        st.image('https://via.placeholder.com/120x60?text=LNP', width=120)
 
     st.markdown('---')
 
-    # Main KPIs simulation
+    # Main KPIs
     kpi_cols = st.columns(5)
     kpis = {
         'System Health': f'{np.random.randint(85,100)}%',
@@ -141,9 +143,9 @@ if 'logged_in' in st.session_state and st.session_state['logged_in']:
         'Budget Deviation': f'{np.random.randint(0,15)}%'
     }
     colors = ['#39FF14', '#FF3131', '#FFFB00', '#00FFFF', '#FF6EC7']
-    for i, (k, v) in enumerate(kpis.items()):
+    for i, (k,v) in enumerate(kpis.items()):
         kpi_cols[i].markdown(f"""
-            <div style='background-color:#1C1C1C; border-radius:10px; padding:20px; text-align:center;'>
+            <div style='background-color:#111827; border-radius:12px; padding:25px; text-align:center;'>
                 <h3 style='color:{colors[i]};'>{k}</h3>
                 <h2 style='color:{colors[i]};'>{v}</h2>
             </div>
@@ -163,9 +165,9 @@ if 'logged_in' in st.session_state and st.session_state['logged_in']:
         dept = st.session_state['selected_dept']
         st.subheader(f'{dept} Department Dashboard')
 
-        assets, energy, budget, vendor_scores, alerts = generate_department_data(dept)
+        assets, energy, budget, vendor_scores, alerts = simulate_department_data(dept)
 
-        # KPIs
+        # Department KPIs
         dept_kpi_cols = st.columns(5)
         dept_kpis = {
             'Total Assets': len(assets),
@@ -176,7 +178,7 @@ if 'logged_in' in st.session_state and st.session_state['logged_in']:
         }
         for i, (k,v) in enumerate(dept_kpis.items()):
             dept_kpi_cols[i].markdown(f"""
-                <div style='background-color:#1C1C1C; border-radius:10px; padding:15px; text-align:center;'>
+                <div style='background-color:#111827; border-radius:12px; padding:20px; text-align:center;'>
                     <h4 style='color:#39FF14;'>{k}</h4>
                     <h3 style='color:#39FF14;'>{v}</h3>
                 </div>
@@ -194,13 +196,13 @@ if 'logged_in' in st.session_state and st.session_state['logged_in']:
             st.plotly_chart(fig_vendor, use_container_width=True)
 
         # Export Buttons
-        col_export1, col_export2 = st.columns(2)
-        with col_export1:
-            csv = pd.concat([assets, energy, budget, vendor_scores, alerts], axis=1).to_csv().encode('utf-8')
-            st.download_button(label='Export CSV', data=csv, file_name=f'{dept}_data.csv', mime='text/csv')
-        with col_export2:
-            pdf_file = generate_pdf(dept, assets, energy, budget, vendor_scores, alerts)
-            st.download_button(label='Export PDF', data=pdf_file, file_name=f'{dept}_report.pdf')
+        col_exp1, col_exp2 = st.columns(2)
+        with col_exp1:
+            combined_csv = pd.concat([assets, energy, budget, vendor_scores, alerts], axis=1).to_csv().encode('utf-8')
+            st.download_button('Export CSV', data=combined_csv, file_name=f'{dept}_data.csv', mime='text/csv')
+        with col_exp2:
+            pdf_file = export_pdf(dept, assets, energy, budget, vendor_scores, alerts)
+            st.download_button('Export PDF', data=pdf_file, file_name=f'{dept}_report.pdf')
 
-        # Auto-refresh every 10 seconds
-        st.experimental_rerun()  # Simple auto-refresh simulation
+        # Auto-refresh every 10 sec
+        st.experimental_rerun()
