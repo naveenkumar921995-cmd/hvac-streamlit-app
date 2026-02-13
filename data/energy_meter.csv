@@ -1,4 +1,0 @@
-total_kwh = energy["kWh"].sum() if "kWh" in energy.columns else 0
-total_cost = (energy["kWh"] * energy["Cost_per_kWh"]).sum() if "Cost_per_kWh" in energy.columns else 0
-
-
