@@ -2,6 +2,10 @@ streamlit
 pandas
 numpy
 plotly
+openpyxl
+xlsxwriter
+reportlab
+bcrypt
 
 
 
