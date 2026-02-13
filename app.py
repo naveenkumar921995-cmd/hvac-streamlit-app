@@ -1,3 +1,40 @@
+import os
+import pandas as pd
+import sqlite3
+
+DB_FILE = "enterprise_v6.db"
+EXCEL_FILE = "DLF_Enterprise_Asset_Master_Template.xlsx"
+
+def initialize_database():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        asset_name TEXT,
+        department TEXT,
+        location TEXT,
+        capacity TEXT,
+        energy_kwh REAL,
+        amc_expiry DATE
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+def auto_import_excel():
+    if not os.path.exists(DB_FILE) or os.path.getsize(DB_FILE) == 0:
+        if os.path.exists(EXCEL_FILE):
+            df = pd.read_excel(EXCEL_FILE)
+            conn = sqlite3.connect(DB_FILE)
+            df.to_sql("assets", conn, if_exists="replace", index=False)
+            conn.close()
+
+initialize_database()
+auto_import_excel()
+
 import streamlit as st
 from PIL import Image
 
