@@ -1,4 +1,24 @@
 import streamlit as st
+from PIL import Image
+
+# ===== HEADER WITH LOGOS =====
+col1, col2, col3 = st.columns([1,6,1])
+
+with col1:
+    st.image("dlf_logo.png", width=120)
+
+with col2:
+    st.markdown(
+        "<h1 style='text-align:center; color:#00F0FF;'>DLF ENTERPRISE CONTROL ROOM V6</h1>",
+        unsafe_allow_html=True
+    )
+
+with col3:
+    st.image("lnp_logo.png", width=120)
+
+st.markdown("---")
+
+import streamlit as st
 import sqlite3
 import pandas as pd
 import numpy as np
