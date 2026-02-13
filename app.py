@@ -32,6 +32,23 @@ import os
 # ==============================
 # PAGE CONFIG
 # ==============================
+st.markdown("""
+<style>
+.stApp {
+    background-color: #0A192F;
+    color: #E6F1FF;
+}
+h1, h2, h3 {
+    color: #00F0FF;
+}
+div[data-testid="stMetric"] {
+    background-color: #112240;
+    padding: 15px;
+    border-radius: 12px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.set_page_config(
     page_title="DLF Enterprise Control Room V6",
     layout="wide",
