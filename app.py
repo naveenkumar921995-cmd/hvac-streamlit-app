@@ -1,186 +1,312 @@
 import streamlit as st
+import sqlite3
 import pandas as pd
 import numpy as np
+import hashlib
 import plotly.express as px
-from fpdf import FPDF
-from io import BytesIO
-from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import time
+import os
 
-# ==================================
-# DLF Enterprise Control Room V6 - Full Expanded & Auto-refresh Fixed
-# ==================================
+# ==============================
+# PAGE CONFIG
+# ==============================
+st.set_page_config(
+    page_title="DLF Enterprise Control Room V6",
+    layout="wide",
+    page_icon="🏢"
+)
 
-st.set_page_config(page_title='DLF Enterprise Control Room V6', layout='wide', page_icon='🏢')
+# ==============================
+# ULTRA DARK BOARDROOM THEME
+# ==============================
 st.markdown("""
 <style>
-body { background-color: #0a0f17; color: #FFFFFF; }
-.sidebar .sidebar-content { background-color: #0a0f17; }
-h1, h2, h3, h4, h5, h6 { color: #00FFFF; }
-div.stButton > button:first-child { background-color: #00FFFF; color:#000000; }
+body {
+    background: linear-gradient(135deg,#0b0f1a,#111827);
+    color:white;
+}
+.big-card {
+    background: rgba(20,25,40,0.9);
+    padding:20px;
+    border-radius:15px;
+    box-shadow:0 0 20px rgba(0,198,255,0.2);
+}
+.metric-card {
+    background: linear-gradient(145deg,#111827,#1f2937);
+    padding:15px;
+    border-radius:12px;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------
-# Users and Roles
-# -------------------------
-users = {
-    'admin': {'password': 'admin123', 'role': 'Admin'},
-    'exec': {'password': 'exec123', 'role': 'Executive'},
-    'eng': {'password': 'eng123', 'role': 'Engineer'}
-}
-roles = ['Admin', 'Executive', 'Engineer']
-departments = ['HVAC','DG','Electrical','STP','WTP','Lifts','CCTV','Fire','Facade','BMS','Compliance']
+# ==============================
+# DATABASE
+# ==============================
+conn = sqlite3.connect("enterprise_v6.db", check_same_thread=False)
+cursor = conn.cursor()
 
-# -------------------------
-# Login
-# -------------------------
-st.title('DLF Enterprise Control Room V6 Login')
-username = st.text_input('Username')
-password = st.text_input('Password', type='password')
+# ==============================
+# TABLE CREATION
+# ==============================
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users(
+id INTEGER PRIMARY KEY,
+username TEXT UNIQUE,
+password TEXT,
+role TEXT)
+""")
 
-if st.button('Login'):
-    if username in users and password == users[username]['password']:
-        st.session_state['logged_in'] = True
-        st.session_state['role'] = users[username]['role']
-        st.session_state['username'] = username
-        st.experimental_rerun()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS assets(
+id INTEGER PRIMARY KEY,
+asset_name TEXT,
+department TEXT,
+location TEXT,
+health TEXT,
+amc_expiry TEXT,
+breakdowns INTEGER)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS energy(
+id INTEGER PRIMARY KEY,
+asset_name TEXT,
+kwh REAL,
+cost REAL,
+date TEXT)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS finance(
+id INTEGER PRIMARY KEY,
+department TEXT,
+budget REAL,
+expense REAL,
+month TEXT)
+""")
+
+conn.commit()
+
+# ==============================
+# PASSWORD HASHING
+# ==============================
+def hash_password(p):
+    return hashlib.sha256(p.encode()).hexdigest()
+
+def create_admin():
+    try:
+        cursor.execute("INSERT INTO users VALUES (NULL,?,?,?)",
+                       ("admin", hash_password("Admin@123"), "Admin"))
+        conn.commit()
+    except:
+        pass
+
+create_admin()
+
+# ==============================
+# LOGIN SYSTEM
+# ==============================
+if "login" not in st.session_state:
+    st.session_state.login = False
+
+if not st.session_state.login:
+    st.title("DLF Enterprise Boardroom Login")
+    u = st.text_input("Username")
+    p = st.text_input("Password", type="password")
+    if st.button("Login"):
+        cursor.execute("SELECT * FROM users WHERE username=? AND password=?",
+                       (u, hash_password(p)))
+        if cursor.fetchone():
+            st.session_state.login = True
+            st.rerun()
+        else:
+            st.error("Invalid Credentials")
+    st.stop()
+
+# ==============================
+# AUTO IMPORT EXCEL TEMPLATE
+# ==============================
+if st.sidebar.button("Import Asset Master (Excel)"):
+    try:
+        file = "DLF_Enterprise_Asset_Master_Template.xlsx"
+        if os.path.exists(file):
+            xl = pd.ExcelFile(file)
+            for sheet in xl.sheet_names:
+                df = xl.parse(sheet)
+                for _, row in df.iterrows():
+                    cursor.execute("""
+                    INSERT INTO assets (asset_name,department,location,health,amc_expiry,breakdowns)
+                    VALUES (?,?,?,?,?,?)
+                    """,(
+                        str(row.get("Asset Name","")),
+                        sheet,
+                        str(row.get("Location","")),
+                        "OK",
+                        str(datetime.now().date() + timedelta(days=365)),
+                        0
+                    ))
+            conn.commit()
+            st.success("Asset Master Imported")
+        else:
+            st.error("Excel file not found in repo")
+    except Exception as e:
+        st.error(str(e))
+
+# ==============================
+# AI ENGINES
+# ==============================
+def risk_score(row):
+    score = 0
+    if row["health"] == "Critical":
+        score += 40
+    if row["breakdowns"] > 2:
+        score += 30
+    if pd.to_datetime(row["amc_expiry"]) < pd.Timestamp.now():
+        score += 20
+    return min(score,100)
+
+def site_kpi():
+    df = pd.read_sql("SELECT * FROM assets", conn)
+    if df.empty:
+        return 100
+    df["risk"] = df.apply(risk_score, axis=1)
+    return max(100 - df["risk"].mean(), 0)
+
+def energy_anomaly():
+    df = pd.read_sql("SELECT * FROM energy", conn)
+    if df.empty:
+        return "Stable"
+    avg = df["kwh"].mean()
+    latest = df["kwh"].iloc[-1]
+    if latest > avg * 1.3:
+        return "Critical"
+    elif latest > avg * 1.1:
+        return "Warning"
+    return "Stable"
+
+# ==============================
+# SIDEBAR MENU
+# ==============================
+menu = st.sidebar.radio("Navigation",[
+    "Boardroom Dashboard",
+    "Asset Intelligence",
+    "Energy Intelligence",
+    "Financial Intelligence",
+    "Control Room Mode"
+])
+
+# ==============================
+# BOARDROOM DASHBOARD
+# ==============================
+if menu == "Boardroom Dashboard":
+
+    st.title("🏢 Executive Boardroom Intelligence")
+
+    col1,col2,col3,col4 = st.columns(4)
+
+    col1.metric("Total Assets",
+        pd.read_sql("SELECT COUNT(*) c FROM assets",conn)["c"][0])
+
+    col2.metric("Site KPI Score", round(site_kpi(),1))
+
+    col3.metric("Energy Status", energy_anomaly())
+
+    finance_df = pd.read_sql("SELECT * FROM finance",conn)
+    if not finance_df.empty:
+        variance = (finance_df["budget"] - finance_df["expense"]).sum()
     else:
-        st.error('Invalid username or password')
+        variance = 0
 
-# -------------------------
-# Utility functions for dummy data
-# -------------------------
-def create_assets(dept):
-    return pd.DataFrame({'Asset':[f'{dept}_Asset_{i}' for i in range(1,11)],
-                         'Status':np.random.choice(['Good','Warning','Critical'],10),
-                         'Criticality':np.random.randint(1,5,10)})
+    col4.metric("Budget Variance", variance)
 
-def create_energy(dept):
-    return pd.DataFrame({'Date':pd.date_range(end=datetime.today(), periods=30),
-                         'Consumption':np.random.randint(100,500,30)})
+    # Department Risk Heatmap
+    df = pd.read_sql("SELECT * FROM assets", conn)
+    if not df.empty:
+        df["Risk"] = df.apply(risk_score, axis=1)
+        dept = df.groupby("department")["Risk"].mean().reset_index()
+        fig = px.bar(dept, x="department", y="Risk",
+                     title="Department Risk Heat Index",
+                     color="Risk",
+                     color_continuous_scale="Reds")
+        st.plotly_chart(fig, use_container_width=True)
 
-def create_budget(dept):
-    return pd.DataFrame({'Category':['Maintenance','IT','Security','Energy'],
-                         'Budget':np.random.randint(50000,200000,4),
-                         'Spent':np.random.randint(30000,180000,4)})
+# ==============================
+# ASSET INTELLIGENCE
+# ==============================
+elif menu == "Asset Intelligence":
 
-def create_vendor(dept):
-    return pd.DataFrame({'Vendor':[f'{dept}_Vendor_{i}' for i in range(1,6)],
-                         'Score':np.random.randint(60,100,5)})
+    st.title("Asset Risk Intelligence")
 
-def create_alerts(dept):
-    return pd.DataFrame({'Alert':[f'{dept} Alert {i}' for i in range(1,4)],
-                         'Severity':np.random.choice(['Low','Medium','High'],3)})
+    df = pd.read_sql("SELECT * FROM assets", conn)
 
-def create_predictive(dept):
-    return pd.DataFrame({'KPI':['Energy Forecast','Budget Forecast','Vendor Risk'],
-                         'Value':[np.random.randint(100,500), np.random.randint(30000,180000), np.random.randint(60,100)]})
+    if not df.empty:
+        df["Risk Score"] = df.apply(risk_score, axis=1)
+        st.dataframe(df)
 
-def create_risk(dept):
-    return pd.DataFrame({'Parameter':['Asset','Energy','Budget','Vendor'],
-                         'Risk Level':np.random.choice(['Low','Medium','High'],4)})
+# ==============================
+# ENERGY INTELLIGENCE
+# ==============================
+elif menu == "Energy Intelligence":
 
-# -------------------------
-# PDF Export
-# -------------------------
-def export_pdf(dept, assets, energy, budget, vendor, alerts, predictive, risk):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font('Arial','B',16)
-    pdf.cell(0,10,f'{dept} Executive Report', ln=True, align='C')
-    pdf.ln(10)
-    pdf.set_font('Arial','',12)
+    st.title("Energy + BTU Analytics")
 
-    for label, df in [('Assets', assets), ('Energy', energy), ('Budget', budget), ('Vendor Scores', vendor), ('Alerts', alerts), ('Predictive KPIs', predictive), ('Risk Matrix', risk)]:
-        pdf.cell(0,10,f'{label}:', ln=True)
-        for i,row in df.iterrows():
-            pdf.cell(0,8,' - '.join([str(v) for v in row.values]), ln=True)
-        pdf.ln(5)
+    with st.form("energy"):
+        a = st.text_input("Asset")
+        k = st.number_input("kWh",0.0)
+        c = st.number_input("Cost",0.0)
+        if st.form_submit_button("Add Energy"):
+            cursor.execute("INSERT INTO energy VALUES(NULL,?,?,?,?)",
+                           (a,k,c,str(datetime.now())))
+            conn.commit()
 
-    output = BytesIO()
-    pdf.output(output)
-    output.seek(0)
-    return output
+    df = pd.read_sql("SELECT * FROM energy", conn)
 
-# -------------------------
-# Dashboard Wall + Department Sections
-# -------------------------
-if 'logged_in' in st.session_state and st.session_state['logged_in']:
-    role = st.session_state['role']
+    if not df.empty:
+        df["BTU"] = df["kwh"] * 3412
+        fig = px.line(df, x="date", y="kwh", title="Energy Trend")
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Auto-refresh every 10 sec
-    st_autorefresh(interval=10000, key="global_refresh")
+# ==============================
+# FINANCIAL INTELLIGENCE
+# ==============================
+elif menu == "Financial Intelligence":
 
-    col1, col2, col3 = st.columns([1,6,1])
-    with col1:
-        st.image('https://via.placeholder.com/120x60?text=DLF', width=120)
-    with col2:
-        st.markdown('<h1 style="text-align:center;color:#00FFFF;">DLF Enterprise Control Room V6</h1>', unsafe_allow_html=True)
-    with col3:
-        st.image('https://via.placeholder.com/120x60?text=LNP', width=120)
+    st.title("Budget vs P&L Forecast")
 
-    st.markdown('---')
+    with st.form("finance"):
+        d = st.text_input("Department")
+        b = st.number_input("Budget",0.0)
+        e = st.number_input("Expense",0.0)
+        m = st.text_input("Month")
+        if st.form_submit_button("Add Record"):
+            cursor.execute("INSERT INTO finance VALUES(NULL,?,?,?,?)",
+                           (d,b,e,m))
+            conn.commit()
 
-    st.subheader('Departments')
-    dept_cols = st.columns(len(departments))
-    for i, dept in enumerate(departments):
-        if dept_cols[i].button(dept):
-            st.session_state['selected_dept'] = dept
+    df = pd.read_sql("SELECT * FROM finance", conn)
+    if not df.empty:
+        df["Variance"] = df["budget"] - df["expense"]
+        st.dataframe(df)
 
-# -------------------------
-# Fully expanded department section template (repeat for each dept)
-# -------------------------
-if 'selected_dept' in st.session_state:
-    dept = st.session_state['selected_dept']
-    st.subheader(f'{dept} Dashboard')
+# ==============================
+# CONTROL ROOM MODE
+# ==============================
+elif menu == "Control Room Mode":
 
-    assets = create_assets(dept)
-    energy = create_energy(dept)
-    budget = create_budget(dept)
-    vendor = create_vendor(dept)
-    alerts = create_alerts(dept)
-    predictive = create_predictive(dept)
-    risk = create_risk(dept)
+    st.title("🔴 LIVE CONTROL ROOM MODE")
 
-    # KPI Cards
-    kpi_cols = st.columns(5)
-    dept_kpis = {
-        'Total Assets': len(assets),
-        'Critical Assets': sum(assets.Status=='Critical'),
-        'Budget Used %': f'{int(budget.Spent.sum()/budget.Budget.sum()*100)}%',
-        'Avg Vendor Score': int(vendor.Score.mean()),
-        'Active Alerts': len(alerts)
-    }
-    colors=['#39FF14','#FF3131','#FFFB00','#00FFFF','#FF6EC7']
-    for i,(k,v) in enumerate(dept_kpis.items()):
-        kpi_cols[i].markdown(f"""
-            <div style='background-color:#111827;border-radius:12px;padding:20px;text-align:center;'>
-                <h4 style='color:{colors[i]};'>{k}</h4>
-                <h3 style='color:{colors[i]};'>{v}</h3>
-            </div>
-        """, unsafe_allow_html=True)
+    st.info("Auto Refresh Every 10 Seconds")
 
-    # Charts
-    col1,col2 = st.columns(2)
-    with col1:
-        fig_energy = px.line(energy, x='Date', y='Consumption', title=f'Energy Trend {dept}', template='plotly_dark')
-        st.plotly_chart(fig_energy, use_container_width=True)
-    with col2:
-        fig_vendor = px.bar(vendor, x='Vendor', y='Score', title=f'Vendor Scores {dept}', template='plotly_dark')
-        st.plotly_chart(fig_vendor, use_container_width=True)
+    placeholder = st.empty()
 
-    # Risk Matrix
-    st.subheader('Risk Matrix')
-    def risk_color(r): return 'red' if r=='High' else 'yellow' if r=='Medium' else 'green'
-    risk_display = risk.style.applymap(lambda x: f'color: {risk_color(x)}', subset=['Risk Level'])
-    st.dataframe(risk_display)
-
-    # Export Buttons
-    col_exp1,col_exp2 = st.columns(2)
-    with col_exp1:
-        csv_data = pd.concat([assets, energy, budget, vendor, alerts], axis=1).to_csv().encode('utf-8')
-        st.download_button(f'Export CSV {dept}', data=csv_data, file_name=f'{dept}_data.csv', mime='text/csv')
-    with col_exp2:
-        pdf_file = export_pdf(dept, assets, energy, budget, vendor, alerts, predictive, risk)
-        st.download_button(f'Export PDF {dept}', data=pdf_file, file_name=f'{dept}_report.pdf')
+    while True:
+        with placeholder.container():
+            col1,col2 = st.columns(2)
+            col1.metric("Site KPI", round(site_kpi(),1))
+            col2.metric("Energy Status", energy_anomaly())
+            df = pd.read_sql("SELECT asset_name,health FROM assets",conn)
+            st.dataframe(df)
+        time.sleep(10)
+        st.rerun()
