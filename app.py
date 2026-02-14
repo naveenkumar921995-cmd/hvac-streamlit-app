@@ -13,19 +13,46 @@ st.set_page_config(
 )
 
 # ===============================
-# DARK DLF CORPORATE THEME
+# LIGHT DLF CORPORATE THEME
 # ===============================
 st.markdown("""
 <style>
-.stApp {background-color: #0A192F; color: #E6F1FF;}
-h1,h2,h3 {color: #00F0FF;}
-div[data-testid="stMetric"] {
-    background-color:#112240;
-    padding:20px;
-    border-radius:15px;
+/* Main background and text */
+.stApp {
+    background-color: #FFFFFF;  /* Light background */
+    color: #0A192F;             /* DLF dark blue for text */
+    font-family: 'Arial', sans-serif;
 }
+
+/* Headings color */
+h1, h2, h3 {
+    color: #0F3057; /* DLF corporate blue */
+}
+
+/* Metrics style */
+div[data-testid="stMetric"] {
+    background-color: #E6F1FF; /* Light blue background for KPI cards */
+    color: #0F3057;            /* Dark text for metrics */
+    padding: 20px;
+    border-radius: 15px;
+    font-weight: bold;
+}
+
+/* Sidebar */
 .sidebar .sidebar-content {
-    background-color:#0F3057;
+    background-color: #F0F4F8; /* Light gray/blue sidebar */
+    color: #0F3057;
+}
+
+/* Table headers in Asset Intelligence / Control Wall */
+.stDataFrame th {
+    background-color: #0F3057 !important;
+    color: #FFFFFF !important;
+}
+
+/* Footer / captions */
+footer, .stCaption {
+    color: #0F3057;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -151,6 +178,8 @@ if page == "Boardroom Dashboard":
     st.markdown("### Department Distribution")
     if not df.empty:
         st.bar_chart(df["Department"].value_counts())
+    else:
+        st.warning("No assets loaded.")
 
 # ===============================
 # ASSET INTELLIGENCE
